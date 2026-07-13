@@ -560,6 +560,99 @@ def detectar_silencio_subito_discursos(
     return findings
 
 
+def _extrair_keywords(texto: str | None) -> set[str]:
+    """Normaliza o campo `keywords` (texto livre separado por virgula, vindo
+    da indexacao da API) num conjunto de termos comparaveis."""
+    if not texto:
+        return set()
+    termos = (t.strip(" .\r\n").upper() for t in texto.split(","))
+    return {t for t in termos if t}
+
+
+def detectar_mudanca_foco_tematico(
+    conn: sqlite3.Connection,
+    mes_referencia: str,
+    meses_historico: int = 6,
+    jaccard_maximo: float = 0.05,
+    min_keywords_historico: int = 5,
+) -> list[dict]:
+    """Compara os temas (campo `keywords`/indexacao, que a propria API ja
+    devolve por discurso) dos discursos do mes com o "perfil tematico"
+    historico do mesmo deputado - sem LLM, so overlap de conjuntos
+    (similaridade de Jaccard). Sinaliza quando o overlap e proximo de zero,
+    ou seja, os temas do mes nao tem quase nada a ver com o que o deputado
+    costumava falar.
+
+    So compara deputados com um perfil tematico historico minimamente
+    estabelecido (`min_keywords_historico` termos distintos no periodo
+    anterior) - sem isso nao ha "padrao usual" pra comparar.
+    """
+    inicio_janela = _meses_atras(mes_referencia, meses_historico)
+    historico = pd.read_sql_query(
+        """
+        SELECT deputado_id, keywords FROM discursos
+        WHERE strftime('%Y-%m', data_hora_inicio) >= ? AND strftime('%Y-%m', data_hora_inicio) < ?
+          AND keywords IS NOT NULL AND keywords != ''
+        """,
+        conn,
+        params=(inicio_janela, mes_referencia),
+    )
+    atual = pd.read_sql_query(
+        """
+        SELECT deputado_id, keywords FROM discursos
+        WHERE strftime('%Y-%m', data_hora_inicio) = ? AND keywords IS NOT NULL AND keywords != ''
+        """,
+        conn,
+        params=(mes_referencia,),
+    )
+    if historico.empty or atual.empty:
+        return []
+
+    keywords_historico: dict[int, set[str]] = {}
+    for deputado_id, grupo in historico.groupby("deputado_id"):
+        termos = set()
+        for texto in grupo["keywords"]:
+            termos |= _extrair_keywords(texto)
+        keywords_historico[deputado_id] = termos
+
+    keywords_mes: dict[int, set[str]] = {}
+    for deputado_id, grupo in atual.groupby("deputado_id"):
+        termos = set()
+        for texto in grupo["keywords"]:
+            termos |= _extrair_keywords(texto)
+        keywords_mes[deputado_id] = termos
+
+    findings = []
+    for deputado_id, termos_hist in keywords_historico.items():
+        if len(termos_hist) < min_keywords_historico:
+            continue
+        termos_atual = keywords_mes.get(deputado_id)
+        if not termos_atual:
+            continue
+        uniao = termos_hist | termos_atual
+        intersecao = termos_hist & termos_atual
+        jaccard = len(intersecao) / len(uniao) if uniao else 0.0
+        if jaccard <= jaccard_maximo:
+            findings.append(
+                {
+                    "deputado_id": int(deputado_id),
+                    "tipo": "DISCURSOS_MUDANCA_FOCO_TEMATICO",
+                    "severidade": "baixa",
+                    "descricao": (
+                        f"Temas dos discursos do mes praticamente nao coincidem com o perfil tematico "
+                        f"historico do deputado (similaridade {jaccard:.0%}). Temas do mes: "
+                        f"{', '.join(sorted(termos_atual)[:5])}."
+                    ),
+                    "dados_suporte": {
+                        "jaccard": float(jaccard),
+                        "temas_historico_amostra": sorted(termos_hist)[:10],
+                        "temas_mes": sorted(termos_atual),
+                    },
+                }
+            )
+    return findings
+
+
 def rodar_regras_estatisticas(conn: sqlite3.Connection, mes_referencia: str) -> list[dict]:
     findings: list[dict] = []
     findings += detectar_outliers_gasto(conn, mes_referencia)
@@ -570,4 +663,5 @@ def rodar_regras_estatisticas(conn: sqlite3.Connection, mes_referencia: str) -> 
     findings += detectar_faltas(conn, mes_referencia)
     findings += detectar_troca_partido(conn, mes_referencia)
     findings += detectar_silencio_subito_discursos(conn, mes_referencia)
+    findings += detectar_mudanca_foco_tematico(conn, mes_referencia)
     return findings

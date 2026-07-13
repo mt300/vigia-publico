@@ -2,6 +2,7 @@ from senado_sentinel.detection.statistical import (
     detectar_concentracao_fornecedor,
     detectar_faltas,
     detectar_fornecedor_pouco_comum,
+    detectar_mudanca_foco_tematico,
     detectar_outliers_gasto,
     detectar_outliers_gasto_vs_pares,
     detectar_silencio_subito_discursos,
@@ -338,13 +339,13 @@ def test_detectar_faltas_diferencia_licenca_de_sem_justificativa(conn):
     assert finding["dados_suporte"]["taxa_ausencia_sem_justificativa"] == 3 / 5
 
 
-def _add_discurso(conn, dep_id, data_hora_inicio, doc=None):
+def _add_discurso(conn, dep_id, data_hora_inicio, doc=None, keywords=None):
     uid = f"discurso-{dep_id}-{data_hora_inicio}"
     if doc is not None:
         uid += f"-{doc}"
     conn.execute(
-        "INSERT INTO discursos (uid, deputado_id, data_hora_inicio) VALUES (?, ?, ?)",
-        (uid, dep_id, data_hora_inicio),
+        "INSERT INTO discursos (uid, deputado_id, data_hora_inicio, keywords) VALUES (?, ?, ?, ?)",
+        (uid, dep_id, data_hora_inicio, keywords),
     )
 
 
@@ -426,4 +427,47 @@ def test_detectar_fornecedor_pouco_comum_ignora_valor_pequeno(conn):
     conn.commit()
 
     findings = detectar_fornecedor_pouco_comum(conn, "2024-03", max_deputados_historico=3, valor_minimo=1000.0)
+    assert findings == []
+
+
+def test_detectar_mudanca_foco_tematico_sinaliza_temas_sem_relacao_com_historico(conn):
+    _add_deputado(conn, 1)
+    conn.commit()
+    # 6 meses falando sempre de agropecuaria
+    for mes in range(1, 7):
+        _add_discurso(conn, 1, f"2024-{mes:02d}-10T10:00", keywords="AGROPECUARIA, SOJA, EXPORTACAO, FAZENDA, PECUARIA.")
+    # mes de referencia: temas completamente diferentes
+    _add_discurso(conn, 1, "2024-07-05T10:00", keywords="CRIPTOMOEDA, BLOCKCHAIN, MINERACAO DIGITAL.")
+    conn.commit()
+
+    findings = detectar_mudanca_foco_tematico(conn, "2024-07", meses_historico=6, min_keywords_historico=5)
+
+    assert len(findings) == 1
+    assert findings[0]["deputado_id"] == 1
+    assert findings[0]["tipo"] == "DISCURSOS_MUDANCA_FOCO_TEMATICO"
+    assert findings[0]["dados_suporte"]["jaccard"] == 0.0
+
+
+def test_detectar_mudanca_foco_tematico_nao_sinaliza_temas_consistentes(conn):
+    _add_deputado(conn, 1)
+    conn.commit()
+    for mes in range(1, 7):
+        _add_discurso(conn, 1, f"2024-{mes:02d}-10T10:00", keywords="AGROPECUARIA, SOJA, EXPORTACAO, FAZENDA, PECUARIA.")
+    _add_discurso(conn, 1, "2024-07-05T10:00", keywords="AGROPECUARIA, SOJA, NOVA SAFRA.")
+    conn.commit()
+
+    findings = detectar_mudanca_foco_tematico(conn, "2024-07", meses_historico=6, min_keywords_historico=5)
+    assert findings == []
+
+
+def test_detectar_mudanca_foco_tematico_ignora_perfil_historico_pequeno_demais(conn):
+    """Sem um perfil tematico historico minimamente estabelecido, nao ha
+    'padrao usual' pra comparar - nao deveria sinalizar nada."""
+    _add_deputado(conn, 1)
+    conn.commit()
+    _add_discurso(conn, 1, "2024-02-10T10:00", keywords="TEMA UNICO.")
+    _add_discurso(conn, 1, "2024-07-05T10:00", keywords="OUTRO TEMA TOTALMENTE DIFERENTE.")
+    conn.commit()
+
+    findings = detectar_mudanca_foco_tematico(conn, "2024-07", meses_historico=6, min_keywords_historico=5)
     assert findings == []
