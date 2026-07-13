@@ -1,4 +1,5 @@
 from senado_sentinel.detection.statistical import (
+    detectar_baixa_atividade_geral,
     detectar_concentracao_fornecedor,
     detectar_faltas,
     detectar_fornecedor_pouco_comum,
@@ -471,3 +472,52 @@ def test_detectar_mudanca_foco_tematico_ignora_perfil_historico_pequeno_demais(c
 
     findings = detectar_mudanca_foco_tematico(conn, "2024-07", meses_historico=6, min_keywords_historico=5)
     assert findings == []
+
+
+def test_detectar_baixa_atividade_geral_sinaliza_mandato_inativo(conn):
+    _add_deputado(conn, 1)
+    _add_deputado(conn, 999)  # outro deputado, so pra existir uma votacao nominal
+    conn.commit()
+    _add_votacao(conn, "v1", "2024-03-10")
+    _add_voto(conn, "v1", 999)
+    conn.commit()
+    # deputado 1: nao vota, nao discursa, nao tem despesa - inativo no mes
+
+    findings = detectar_baixa_atividade_geral(conn, "2024-03")
+
+    ids = {f["deputado_id"] for f in findings}
+    assert 1 in ids
+    assert 999 not in ids  # votou, entao nao e "inativo"
+    assert findings[0]["tipo"] == "BAIXA_ATIVIDADE_GERAL"
+
+
+def test_detectar_baixa_atividade_geral_nao_sinaliza_se_teve_discurso(conn):
+    """So conta se os TRES sinais (presenca, discurso, gasto) baterem ao
+    mesmo tempo - ter discursado ja tira do combinado, mesmo sem votar/gastar."""
+    _add_deputado(conn, 1)
+    _add_deputado(conn, 999)
+    conn.commit()
+    _add_votacao(conn, "v1", "2024-03-10")
+    _add_voto(conn, "v1", 999)
+    _add_discurso(conn, 1, "2024-03-05T10:00")
+    conn.commit()
+
+    findings = detectar_baixa_atividade_geral(conn, "2024-03")
+    assert not any(f["deputado_id"] == 1 for f in findings)
+
+
+def test_detectar_baixa_atividade_geral_nao_sinaliza_licenca(conn):
+    """Ausencia inteira do mes justificada por licenca nao conta pro sinal
+    combinado - mesma logica de detectar_faltas."""
+    conn.execute("INSERT INTO legislaturas (id, data_inicio, data_fim) VALUES (57, '2023-02-01', '2027-01-31')")
+    _add_deputado(conn, 1)
+    _add_deputado(conn, 999)
+    conn.commit()
+    _add_historico(conn, 1, 57, "2023-02-01T00:00", "Exercício")
+    _add_historico(conn, 1, 57, "2024-03-01T00:00", "Licença")
+    _add_votacao(conn, "v1", "2024-03-10")
+    _add_voto(conn, "v1", 999)
+    conn.commit()
+
+    findings = detectar_baixa_atividade_geral(conn, "2024-03")
+    assert not any(f["deputado_id"] == 1 for f in findings)

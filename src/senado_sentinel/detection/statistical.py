@@ -381,6 +381,65 @@ def _situacao_na_data(mapa: dict[int, tuple[list[str], list[str]]], deputado_id:
     return situacoes[idx] if idx >= 0 else None
 
 
+def _faltas_por_deputado(conn: sqlite3.Connection, mes_referencia: str) -> tuple[pd.DataFrame, int]:
+    """Para cada deputado, quantas votacoes nominais do mes ele perdeu SEM
+    licenca oficial ativa (`faltas_sem_justificativa`) e quantas perdeu
+    durante licenca (`faltas_licenca`). Base compartilhada por
+    `detectar_faltas` e `detectar_baixa_atividade_geral`.
+
+    Retorna (dataframe, total_votacoes_mes). Dataframe vazio se nao houve
+    nenhuma votacao nominal no mes (nao ha base pra avaliar presenca).
+    """
+    votacoes_mes = pd.read_sql_query(
+        """
+        SELECT DISTINCT v.id, v.data FROM votacoes v
+        JOIN votos vo ON vo.votacao_id = v.id
+        WHERE strftime('%Y-%m', v.data) = ?
+        """,
+        conn,
+        params=(mes_referencia,),
+    )
+    if votacoes_mes.empty:
+        return pd.DataFrame(), 0
+    total_votacoes_mes = len(votacoes_mes)
+
+    deputados = pd.read_sql_query("SELECT id FROM deputados", conn)["id"].tolist()
+    mapa_situacao = _mapa_situacao_por_data(conn)
+
+    votos_mes = pd.read_sql_query(
+        """
+        SELECT deputado_id, votacao_id FROM votos
+        WHERE votacao_id IN (SELECT id FROM votacoes WHERE strftime('%Y-%m', data) = ?)
+        """,
+        conn,
+        params=(mes_referencia,),
+    )
+    votadas_por_deputado = votos_mes.groupby("deputado_id")["votacao_id"].apply(set).to_dict()
+
+    linhas = []
+    for deputado_id in deputados:
+        votadas = votadas_por_deputado.get(deputado_id, set())
+        faltas_licenca = 0
+        faltas_sem_justificativa = 0
+        for votacao in votacoes_mes.itertuples():
+            if votacao.id in votadas:
+                continue
+            situacao = _situacao_na_data(mapa_situacao, deputado_id, votacao.data)
+            if situacao == SITUACAO_LICENCA:
+                faltas_licenca += 1
+            else:
+                faltas_sem_justificativa += 1
+        linhas.append(
+            {
+                "deputado_id": deputado_id,
+                "faltas_sem_justificativa": faltas_sem_justificativa,
+                "faltas_licenca": faltas_licenca,
+                "taxa_sem_justificativa": faltas_sem_justificativa / total_votacoes_mes,
+            }
+        )
+    return pd.DataFrame(linhas), total_votacoes_mes
+
+
 def detectar_faltas(conn: sqlite3.Connection, mes_referencia: str) -> list[dict]:
     """Taxa de ausencia SEM JUSTIFICATIVA (votacoes nominais do Plenario sem voto
     registrado, com o deputado fora de licenca oficial naquela data) no mes.
@@ -400,64 +459,29 @@ def detectar_faltas(conn: sqlite3.Connection, mes_referencia: str) -> list[dict]
       taxa que dispara o alerta. "Obstrucao" (tatica de plenario) ja aparece
       como um voto registrado normal e nao e afetada por essa distincao.
     """
-    votacoes_mes = pd.read_sql_query(
-        """
-        SELECT DISTINCT v.id, v.data FROM votacoes v
-        JOIN votos vo ON vo.votacao_id = v.id
-        WHERE strftime('%Y-%m', v.data) = ?
-        """,
-        conn,
-        params=(mes_referencia,),
-    )
-    if votacoes_mes.empty:
+    faltas, total_votacoes_mes = _faltas_por_deputado(conn, mes_referencia)
+    if faltas.empty:
         return []
-    total_votacoes_mes = len(votacoes_mes)
-
-    deputados = pd.read_sql_query("SELECT id FROM deputados", conn)["id"].tolist()
-    mapa_situacao = _mapa_situacao_por_data(conn)
-
-    votos_mes = pd.read_sql_query(
-        """
-        SELECT deputado_id, votacao_id FROM votos
-        WHERE votacao_id IN (SELECT id FROM votacoes WHERE strftime('%Y-%m', data) = ?)
-        """,
-        conn,
-        params=(mes_referencia,),
-    )
-    votadas_por_deputado = votos_mes.groupby("deputado_id")["votacao_id"].apply(set).to_dict()
 
     findings = []
-    for deputado_id in deputados:
-        votadas = votadas_por_deputado.get(deputado_id, set())
-        faltas_licenca = 0
-        faltas_sem_justificativa = 0
-        for votacao in votacoes_mes.itertuples():
-            if votacao.id in votadas:
-                continue
-            situacao = _situacao_na_data(mapa_situacao, deputado_id, votacao.data)
-            if situacao == SITUACAO_LICENCA:
-                faltas_licenca += 1
-            else:
-                faltas_sem_justificativa += 1
-
-        taxa_sem_justificativa = faltas_sem_justificativa / total_votacoes_mes
-        if taxa_sem_justificativa >= FALTA_INJUSTIFICADA_TAXA_LIMIAR:
-            complemento = f" (mais {faltas_licenca} falta(s) durante licenca oficial, nao contabilizada(s) aqui)." if faltas_licenca else "."
+    for row in faltas.itertuples():
+        if row.taxa_sem_justificativa >= FALTA_INJUSTIFICADA_TAXA_LIMIAR:
+            complemento = f" (mais {row.faltas_licenca} falta(s) durante licenca oficial, nao contabilizada(s) aqui)." if row.faltas_licenca else "."
             findings.append(
                 {
-                    "deputado_id": int(deputado_id),
+                    "deputado_id": int(row.deputado_id),
                     "tipo": "TAXA_AUSENCIA_ALTA",
-                    "severidade": "alta" if taxa_sem_justificativa >= 0.6 else "media",
+                    "severidade": "alta" if row.taxa_sem_justificativa >= 0.6 else "media",
                     "descricao": (
-                        f"Ausente sem licenca registrada (sem voto registrado) em {taxa_sem_justificativa:.0%} "
+                        f"Ausente sem licenca registrada (sem voto registrado) em {row.taxa_sem_justificativa:.0%} "
                         f"das {total_votacoes_mes} votacoes nominais do Plenario no mes" + complemento +
                         " O motivo especifico da ausencia nao esta disponivel na API - requer verificacao manual."
                     ),
                     "dados_suporte": {
                         "votacoes_no_mes": int(total_votacoes_mes),
-                        "faltas_sem_justificativa": int(faltas_sem_justificativa),
-                        "faltas_licenca": int(faltas_licenca),
-                        "taxa_ausencia_sem_justificativa": float(taxa_sem_justificativa),
+                        "faltas_sem_justificativa": int(row.faltas_sem_justificativa),
+                        "faltas_licenca": int(row.faltas_licenca),
+                        "taxa_ausencia_sem_justificativa": float(row.taxa_sem_justificativa),
                     },
                 }
             )
@@ -653,6 +677,56 @@ def detectar_mudanca_foco_tematico(
     return findings
 
 
+def detectar_baixa_atividade_geral(conn: sqlite3.Connection, mes_referencia: str) -> list[dict]:
+    """Sinal COMBINADO: deputado com ausencia total (sem licenca), ZERO
+    discursos e ZERO despesas declaradas no mesmo mes - um mandato
+    praticamente inativo naquele periodo. Mais forte que qualquer um dos tres
+    sinais isolados (`detectar_faltas`, `detectar_silencio_subito_discursos`,
+    despesas zeradas por si so nao e incomum), porque exige os tres ao mesmo
+    tempo - uma coincidencia bem mais rara e especifica.
+    """
+    faltas, total_votacoes_mes = _faltas_por_deputado(conn, mes_referencia)
+    if faltas.empty:
+        return []
+    # sem NENHUM voto registrado no mes, e sem estar de licenca em nenhuma das faltas
+    sem_presenca = faltas[
+        (faltas["faltas_sem_justificativa"] == total_votacoes_mes) & (faltas["faltas_licenca"] == 0)
+    ]["deputado_id"]
+    if sem_presenca.empty:
+        return []
+
+    discursos_mes = pd.read_sql_query(
+        "SELECT DISTINCT deputado_id FROM discursos WHERE strftime('%Y-%m', data_hora_inicio) = ?",
+        conn,
+        params=(mes_referencia,),
+    )["deputado_id"]
+    ano, mes = (int(p) for p in mes_referencia.split("-"))
+    despesas_mes = pd.read_sql_query(
+        "SELECT DISTINCT deputado_id FROM despesas WHERE ano = ? AND mes = ?", conn, params=(ano, mes)
+    )["deputado_id"]
+
+    candidatos = set(sem_presenca) - set(discursos_mes) - set(despesas_mes)
+    if not candidatos:
+        return []
+
+    findings = []
+    for deputado_id in sorted(candidatos):
+        findings.append(
+            {
+                "deputado_id": int(deputado_id),
+                "tipo": "BAIXA_ATIVIDADE_GERAL",
+                "severidade": "alta",
+                "descricao": (
+                    f"Nenhuma das {total_votacoes_mes} votacoes nominais do Plenario, nenhum discurso e "
+                    f"nenhuma despesa declarada no mes, sem licenca oficial registrada no periodo - "
+                    f"mandato aparentemente inativo no mes, requer verificacao manual."
+                ),
+                "dados_suporte": {"votacoes_no_mes": int(total_votacoes_mes)},
+            }
+        )
+    return findings
+
+
 def rodar_regras_estatisticas(conn: sqlite3.Connection, mes_referencia: str) -> list[dict]:
     findings: list[dict] = []
     findings += detectar_outliers_gasto(conn, mes_referencia)
@@ -664,4 +738,5 @@ def rodar_regras_estatisticas(conn: sqlite3.Connection, mes_referencia: str) -> 
     findings += detectar_troca_partido(conn, mes_referencia)
     findings += detectar_silencio_subito_discursos(conn, mes_referencia)
     findings += detectar_mudanca_foco_tematico(conn, mes_referencia)
+    findings += detectar_baixa_atividade_geral(conn, mes_referencia)
     return findings
