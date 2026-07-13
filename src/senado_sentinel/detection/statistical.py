@@ -420,6 +420,71 @@ def detectar_troca_partido(conn: sqlite3.Connection, mes_referencia: str) -> lis
     return findings
 
 
+def _meses_atras(mes_referencia: str, n: int) -> str:
+    ano, mes = (int(p) for p in mes_referencia.split("-"))
+    total = (ano * 12 + (mes - 1)) - n
+    return f"{total // 12:04d}-{total % 12 + 1:02d}"
+
+
+def detectar_silencio_subito_discursos(
+    conn: sqlite3.Connection, mes_referencia: str, meses_historico: int = 6, media_minima_historica: float = 1.0
+) -> list[dict]:
+    """Deputado que tinha um padrao REGULAR de discursos (media historica
+    minima de `media_minima_historica`/mes nos ultimos `meses_historico`
+    meses) e fica em silencio total (zero discursos) no mes de referencia.
+
+    Nao sinaliza deputados que simplesmente nunca discursam muito - isso e
+    normal pra boa parte do mandato e nao e, por si so, um sinal (ver
+    escopo/limitacoes no README). O sinal e a QUEDA em relacao ao proprio
+    padrao estabelecido, nao o silencio absoluto.
+    """
+    inicio_janela = _meses_atras(mes_referencia, meses_historico)
+    historico = pd.read_sql_query(
+        """
+        SELECT deputado_id, COUNT(*) AS n
+        FROM discursos
+        WHERE strftime('%Y-%m', data_hora_inicio) >= ? AND strftime('%Y-%m', data_hora_inicio) < ?
+        GROUP BY deputado_id
+        """,
+        conn,
+        params=(inicio_janela, mes_referencia),
+    )
+    if historico.empty:
+        return []
+    historico["media_mensal"] = historico["n"] / meses_historico
+
+    contagem_mes = pd.read_sql_query(
+        "SELECT deputado_id, COUNT(*) AS n FROM discursos WHERE strftime('%Y-%m', data_hora_inicio) = ? GROUP BY deputado_id",
+        conn,
+        params=(mes_referencia,),
+    ).set_index("deputado_id")["n"]
+
+    findings = []
+    for row in historico.itertuples():
+        if row.media_mensal < media_minima_historica:
+            continue
+        atual = contagem_mes.get(row.deputado_id, 0)
+        if atual == 0:
+            findings.append(
+                {
+                    "deputado_id": int(row.deputado_id),
+                    "tipo": "DISCURSOS_SILENCIO_SUBITO",
+                    "severidade": "alta" if row.media_mensal >= 3 else "media",
+                    "descricao": (
+                        f"Nenhum discurso registrado no mes, apesar de uma media de "
+                        f"{row.media_mensal:.1f} discursos/mes nos {meses_historico} meses anteriores "
+                        f"({int(row.n)} no total)."
+                    ),
+                    "dados_suporte": {
+                        "media_mensal_historica": float(row.media_mensal),
+                        "total_periodo_anterior": int(row.n),
+                        "meses_historico": meses_historico,
+                    },
+                }
+            )
+    return findings
+
+
 def rodar_regras_estatisticas(conn: sqlite3.Connection, mes_referencia: str) -> list[dict]:
     findings: list[dict] = []
     findings += detectar_outliers_gasto(conn, mes_referencia)
@@ -428,4 +493,5 @@ def rodar_regras_estatisticas(conn: sqlite3.Connection, mes_referencia: str) -> 
     findings += detectar_concentracao_fornecedor(conn, mes_referencia)
     findings += detectar_faltas(conn, mes_referencia)
     findings += detectar_troca_partido(conn, mes_referencia)
+    findings += detectar_silencio_subito_discursos(conn, mes_referencia)
     return findings

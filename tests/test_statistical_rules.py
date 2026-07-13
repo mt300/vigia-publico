@@ -3,6 +3,7 @@ from senado_sentinel.detection.statistical import (
     detectar_faltas,
     detectar_outliers_gasto,
     detectar_outliers_gasto_vs_pares,
+    detectar_silencio_subito_discursos,
     detectar_troca_partido,
     detectar_valores_repetidos,
 )
@@ -334,3 +335,55 @@ def test_detectar_faltas_diferencia_licenca_de_sem_justificativa(conn):
     assert finding["dados_suporte"]["faltas_licenca"] == 2
     assert finding["dados_suporte"]["faltas_sem_justificativa"] == 3
     assert finding["dados_suporte"]["taxa_ausencia_sem_justificativa"] == 3 / 5
+
+
+def _add_discurso(conn, dep_id, data_hora_inicio, doc=None):
+    uid = f"discurso-{dep_id}-{data_hora_inicio}"
+    if doc is not None:
+        uid += f"-{doc}"
+    conn.execute(
+        "INSERT INTO discursos (uid, deputado_id, data_hora_inicio) VALUES (?, ?, ?)",
+        (uid, dep_id, data_hora_inicio),
+    )
+
+
+def test_detectar_silencio_subito_discursos_sinaliza_queda_apos_padrao_regular(conn):
+    _add_deputado(conn, 1)
+    conn.commit()
+    # 6 meses anteriores com media de 2 discursos/mes
+    for mes in range(1, 7):
+        for i in range(2):
+            _add_discurso(conn, 1, f"2024-{mes:02d}-10T10:00", doc=i)
+    conn.commit()
+
+    findings = detectar_silencio_subito_discursos(conn, "2024-07", meses_historico=6, media_minima_historica=1.0)
+
+    assert len(findings) == 1
+    assert findings[0]["deputado_id"] == 1
+    assert findings[0]["tipo"] == "DISCURSOS_SILENCIO_SUBITO"
+    assert findings[0]["dados_suporte"]["media_mensal_historica"] == 2.0
+
+
+def test_detectar_silencio_subito_discursos_ignora_deputado_ja_naturalmente_quieto(conn):
+    """Deputado que so discursou 1 vez em 6 meses (media 0.17/mes) nunca teve
+    um padrao regular estabelecido - silencio no mes seguinte e normal pra
+    ele, nao e uma queda digna de alerta."""
+    _add_deputado(conn, 1)
+    conn.commit()
+    _add_discurso(conn, 1, "2024-02-10T10:00")
+    conn.commit()
+
+    findings = detectar_silencio_subito_discursos(conn, "2024-07", meses_historico=6, media_minima_historica=1.0)
+    assert findings == []
+
+
+def test_detectar_silencio_subito_discursos_nao_sinaliza_quem_continua_ativo(conn):
+    _add_deputado(conn, 1)
+    conn.commit()
+    for mes in range(1, 7):
+        _add_discurso(conn, 1, f"2024-{mes:02d}-10T10:00")
+    _add_discurso(conn, 1, "2024-07-05T10:00")  # continuou discursando no mes de referencia
+    conn.commit()
+
+    findings = detectar_silencio_subito_discursos(conn, "2024-07", meses_historico=6, media_minima_historica=1.0)
+    assert findings == []
