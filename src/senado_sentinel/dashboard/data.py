@@ -200,7 +200,19 @@ def get_presenca_mensal(
     """
     df = _query(sql, tuple(params + [mes_inicio, mes_fim]))
     df["taxa_presenca"] = df["total_votado"] / df["total_esperado"].replace(0, pd.NA)
+    df["proximo_eleicao"] = df["mes"].apply(mes_proximo_de_eleicao_geral)
     return df
+
+
+def mes_proximo_de_eleicao_geral(mes: str) -> bool:
+    """True se `mes` (YYYY-MM) esta nos 3 meses (ago/set/out) que antecedem
+    uma eleicao geral (presidente/governador/senador/deputados - onde
+    deputados federais concorrem a reeleicao), que no Brasil acontece em
+    outubro de anos com resto 2 na divisao por 4 (2018, 2022, 2026, 2030...).
+    Nao cobre eleicoes municipais (prefeito/vereador, deputados federais nao
+    sao candidatos nelas)."""
+    ano, m = (int(p) for p in mes.split("-"))
+    return ano % 4 == 2 and m in (8, 9, 10)
 
 
 @st.cache_data(ttl=CACHE_TTL_SEGUNDOS)
