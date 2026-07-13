@@ -221,6 +221,81 @@ def detectar_valores_repetidos(conn: sqlite3.Connection, mes_referencia: str, mi
     return findings
 
 
+def detectar_fornecedor_pouco_comum(
+    conn: sqlite3.Connection, mes_referencia: str, max_deputados_historico: int = 1, valor_minimo: float = 15000.0
+) -> list[dict]:
+    """Fornecedor usado por POUQUISSIMOS deputados no historico completo (nao
+    so nesse mes) e com valor ALTO nesse mes - diferente de
+    `detectar_concentracao_fornecedor`, que so olha a fracao do gasto de UM
+    deputado, sem considerar se o fornecedor e um grande prestador nacional
+    ou um fornecedor de nicho.
+
+    Limitacao importante, validada contra dados reais: a MAIORIA dos
+    fornecedores da CEAP e naturalmente regional (posto de combustivel,
+    imobiliaria/aluguel de escritorio, locadora de veiculos, grafica local -
+    cada deputado usa fornecedores da propria base eleitoral), entao "usado
+    por poucos deputados" e o normal, nao uma excecao. Isolar de verdade uma
+    empresa "de fachada" exigiria dado externo (idade da empresa, quadro
+    societario via Receita Federal - ver README). Sem isso, o limiar de
+    valor default e propositalmente ALTO (`valor_minimo`) pra reduzir ruido
+    de relacoes legitimas com fornecedores locais pequenos, focando em gasto
+    concentrado e substancial com um fornecedor que praticamente mais
+    ninguem usa.
+
+    Usa CNPJ/CPF do fornecedor (nao o nome) como identidade, pra nao
+    depender de variacoes de grafia do nome. A comparacao de popularidade e
+    feita via JOIN em SQL (nao uma clausula IN com milhares de valores) para
+    nao esbarrar no limite de variaveis do SQLite.
+    """
+    ano, mes = (int(p) for p in mes_referencia.split("-"))
+    gasto_mes = pd.read_sql_query(
+        """
+        WITH popularidade AS (
+            SELECT cnpj_cpf_fornecedor, COUNT(DISTINCT deputado_id) AS n_deputados
+            FROM despesas
+            WHERE cnpj_cpf_fornecedor IS NOT NULL AND cnpj_cpf_fornecedor != ''
+            GROUP BY cnpj_cpf_fornecedor
+            HAVING n_deputados <= ?
+        )
+        SELECT e.deputado_id, e.cnpj_cpf_fornecedor, e.nome_fornecedor,
+               GROUP_CONCAT(DISTINCT e.tipo_despesa) AS tipos_despesa,
+               SUM(e.valor_liquido) AS total, p.n_deputados
+        FROM despesas e
+        JOIN popularidade p ON p.cnpj_cpf_fornecedor = e.cnpj_cpf_fornecedor
+        WHERE e.ano = ? AND e.mes = ?
+        GROUP BY e.deputado_id, e.cnpj_cpf_fornecedor
+        HAVING total >= ?
+        """,
+        conn,
+        params=(max_deputados_historico, ano, mes, valor_minimo),
+    )
+    if gasto_mes.empty:
+        return []
+
+    findings = []
+    for row in gasto_mes.itertuples():
+        findings.append(
+            {
+                "deputado_id": int(row.deputado_id),
+                "tipo": "FORNECEDOR_POUCO_COMUM",
+                "severidade": "alta" if row.n_deputados == 1 else "media",
+                "descricao": (
+                    f"Gasto de R$ {row.total:,.2f} em '{row.tipos_despesa}' com '{row.nome_fornecedor}', "
+                    f"um fornecedor usado por apenas {row.n_deputados} deputado(s) em todo o historico "
+                    f"registrado."
+                ),
+                "dados_suporte": {
+                    "fornecedor": row.nome_fornecedor,
+                    "cnpj_cpf_fornecedor": row.cnpj_cpf_fornecedor,
+                    "tipos_despesa": row.tipos_despesa,
+                    "valor_mes": float(row.total),
+                    "n_deputados_historico": int(row.n_deputados),
+                },
+            }
+        )
+    return findings
+
+
 def detectar_concentracao_fornecedor(conn: sqlite3.Connection, mes_referencia: str, limiar_pct: float = 0.6) -> list[dict]:
     """Sinaliza quando um unico fornecedor concentra uma fracao grande do gasto do mes.
 
@@ -490,6 +565,7 @@ def rodar_regras_estatisticas(conn: sqlite3.Connection, mes_referencia: str) -> 
     findings += detectar_outliers_gasto(conn, mes_referencia)
     findings += detectar_outliers_gasto_vs_pares(conn, mes_referencia)
     findings += detectar_valores_repetidos(conn, mes_referencia)
+    findings += detectar_fornecedor_pouco_comum(conn, mes_referencia)
     findings += detectar_concentracao_fornecedor(conn, mes_referencia)
     findings += detectar_faltas(conn, mes_referencia)
     findings += detectar_troca_partido(conn, mes_referencia)

@@ -1,6 +1,7 @@
 from senado_sentinel.detection.statistical import (
     detectar_concentracao_fornecedor,
     detectar_faltas,
+    detectar_fornecedor_pouco_comum,
     detectar_outliers_gasto,
     detectar_outliers_gasto_vs_pares,
     detectar_silencio_subito_discursos,
@@ -16,17 +17,17 @@ def _add_deputado(conn, dep_id, nome="Teste", partido=None, uf=None):
     )
 
 
-def _add_despesa(conn, dep_id, ano, mes, tipo, valor, fornecedor="Fornecedor X", doc=None, data_documento=None):
+def _add_despesa(conn, dep_id, ano, mes, tipo, valor, fornecedor="Fornecedor X", doc=None, data_documento=None, cnpj=None):
     uid = f"{dep_id}-{ano}-{mes}-{tipo}-{fornecedor}-{valor}"
     if doc is not None:
         uid += f"-{doc}"
     data_documento = data_documento or f"{ano:04d}-{mes:02d}-01"
     conn.execute(
         """
-        INSERT INTO despesas (uid, deputado_id, ano, mes, tipo_despesa, nome_fornecedor, valor_liquido, data_documento)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO despesas (uid, deputado_id, ano, mes, tipo_despesa, nome_fornecedor, valor_liquido, data_documento, cnpj_cpf_fornecedor)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (uid, dep_id, ano, mes, tipo, fornecedor, valor, data_documento),
+        (uid, dep_id, ano, mes, tipo, fornecedor, valor, data_documento, cnpj),
     )
 
 
@@ -386,4 +387,43 @@ def test_detectar_silencio_subito_discursos_nao_sinaliza_quem_continua_ativo(con
     conn.commit()
 
     findings = detectar_silencio_subito_discursos(conn, "2024-07", meses_historico=6, media_minima_historica=1.0)
+    assert findings == []
+
+
+def test_detectar_fornecedor_pouco_comum_sinaliza_fornecedor_de_nicho(conn):
+    _add_deputado(conn, 1)
+    conn.commit()
+    # fornecedor "raro" usado so pelo deputado 1, em 2 meses diferentes (2 deputados nao, e o mesmo 1)
+    _add_despesa(conn, 1, 2024, 2, "CONSULTORIA", 500, fornecedor="Nicho Consultoria ME", cnpj="11111111000111")
+    _add_despesa(conn, 1, 2024, 3, "CONSULTORIA", 5000, fornecedor="Nicho Consultoria ME", cnpj="11111111000111")
+    conn.commit()
+
+    findings = detectar_fornecedor_pouco_comum(conn, "2024-03", max_deputados_historico=3, valor_minimo=1000.0)
+
+    assert len(findings) == 1
+    assert findings[0]["deputado_id"] == 1
+    assert findings[0]["tipo"] == "FORNECEDOR_POUCO_COMUM"
+    assert findings[0]["dados_suporte"]["n_deputados_historico"] == 1
+    assert findings[0]["severidade"] == "alta"
+
+
+def test_detectar_fornecedor_pouco_comum_ignora_fornecedor_grande_nacional(conn):
+    """Fornecedor usado por muitos deputados (posto de gasolina de rede,
+    companhia aerea etc) nao e de nicho, mesmo com valor alto num mes."""
+    for i in range(1, 6):
+        _add_deputado(conn, i)
+        _add_despesa(conn, i, 2024, 3, "PASSAGEM AEREA", 3000, fornecedor="Companhia Aerea Nacional", cnpj="99999999000199")
+    conn.commit()
+
+    findings = detectar_fornecedor_pouco_comum(conn, "2024-03", max_deputados_historico=3, valor_minimo=1000.0)
+    assert findings == []
+
+
+def test_detectar_fornecedor_pouco_comum_ignora_valor_pequeno(conn):
+    _add_deputado(conn, 1)
+    conn.commit()
+    _add_despesa(conn, 1, 2024, 3, "CONSULTORIA", 200, fornecedor="Nicho Consultoria ME", cnpj="11111111000111")
+    conn.commit()
+
+    findings = detectar_fornecedor_pouco_comum(conn, "2024-03", max_deputados_historico=3, valor_minimo=1000.0)
     assert findings == []
