@@ -727,6 +727,123 @@ def detectar_baixa_atividade_geral(conn: sqlite3.Connection, mes_referencia: str
     return findings
 
 
+def _concordancia_com_partido(
+    conn: sqlite3.Connection, deputado_id: int, partido: str, data_inicio: str, data_fim: str
+) -> tuple[float, int] | None:
+    """Fracao dos votos (Sim/Nao) do deputado, num periodo, que bateram com a
+    posicao MAJORITARIA dos outros membros do partido nas mesmas votacoes.
+    Usa o partido ATUAL de cada membro (nao um historico ponto-a-ponto de
+    todo mundo) como aproximacao - imprecisao pequena, so relevante se um
+    colega tambem tiver trocado de partido bem no meio da janela comparada.
+
+    None se nao houver pelo menos 3 votacoes comparaveis no periodo (base
+    pequena demais pra uma fracao confiavel).
+    """
+    votos_deputado = pd.read_sql_query(
+        """
+        SELECT vo.votacao_id, vo.voto FROM votos vo
+        JOIN votacoes vt ON vt.id = vo.votacao_id
+        WHERE vo.deputado_id = ? AND vt.data >= ? AND vt.data < ? AND vo.voto IN ('Sim', 'Não')
+        """,
+        conn,
+        params=(deputado_id, data_inicio, data_fim),
+    )
+    if len(votos_deputado) < 3:
+        return None
+
+    votos_partido = pd.read_sql_query(
+        """
+        SELECT vo.votacao_id, vo.voto, COUNT(*) AS n
+        FROM votos vo
+        JOIN deputados d ON d.id = vo.deputado_id
+        JOIN votacoes vt ON vt.id = vo.votacao_id
+        WHERE d.sigla_partido = ? AND vo.deputado_id != ? AND vo.voto IN ('Sim', 'Não')
+          AND vt.data >= ? AND vt.data < ? AND vo.votacao_id IN ({})
+        GROUP BY vo.votacao_id, vo.voto
+        """.format(",".join("?" * len(votos_deputado))),
+        conn,
+        params=(partido, deputado_id, data_inicio, data_fim, *votos_deputado["votacao_id"].tolist()),
+    )
+    if votos_partido.empty:
+        return None
+
+    maioria_partido = votos_partido.loc[votos_partido.groupby("votacao_id")["n"].idxmax()].set_index("votacao_id")["voto"]
+
+    comparaveis = votos_deputado[votos_deputado["votacao_id"].isin(maioria_partido.index)]
+    if len(comparaveis) < 3:
+        return None
+
+    concordou = (comparaveis.set_index("votacao_id")["voto"] == maioria_partido.loc[comparaveis["votacao_id"]]).sum()
+    return concordou / len(comparaveis), len(comparaveis)
+
+
+def detectar_mudanca_alinhamento_voto(conn: sqlite3.Connection, mes_referencia: str, meses_janela: int = 6) -> list[dict]:
+    """Para deputados que trocaram de partido dentro do mes de referencia,
+    compara a concordancia de voto com a MAIORIA do partido antigo (nos
+    votos antes da troca) com a concordancia com a maioria do partido novo
+    (nos votos depois da troca, ate o fim do mes de referencia).
+
+    Deliberadamente informativo (severidade baixa, como `detectar_troca_partido`)
+    - o sistema NAO classifica qual direcao seria "suspeita" (alinhar-se ao
+    novo partido rapido pode ser genuina afinidade ideologica ou troca por
+    conveniencia; manter o alinhamento antigo pode ser principio ou
+    desorientacao) - so reporta o dado numerico pra revisao humana.
+    """
+    trocas = pd.read_sql_query(
+        """
+        SELECT deputado_id, data_hora, sigla_partido
+        FROM deputado_historico
+        WHERE strftime('%Y-%m', data_hora) = ? AND sigla_partido IS NOT NULL
+        ORDER BY deputado_id, data_hora
+        """,
+        conn,
+        params=(mes_referencia,),
+    )
+    if trocas.empty:
+        return []
+
+    inicio_janela = _meses_atras(mes_referencia, meses_janela)
+    fim_mes_referencia = _meses_atras(mes_referencia, -1)  # inicio do mes seguinte, usado como fim exclusivo
+
+    findings = []
+    for deputado_id, grupo in trocas.groupby("deputado_id"):
+        partidos = grupo["sigla_partido"].unique().tolist()
+        if len(partidos) < 2:
+            continue
+        partido_antigo, partido_novo = partidos[0], partidos[-1]
+        data_troca = grupo["data_hora"].iloc[-1][:10]
+
+        resultado_antigo = _concordancia_com_partido(conn, deputado_id, partido_antigo, inicio_janela, data_troca)
+        resultado_novo = _concordancia_com_partido(conn, deputado_id, partido_novo, data_troca, f"{fim_mes_referencia}-01")
+        if resultado_antigo is None or resultado_novo is None:
+            continue
+        concordancia_antiga, n_antigo = resultado_antigo
+        concordancia_nova, n_novo = resultado_novo
+
+        findings.append(
+            {
+                "deputado_id": int(deputado_id),
+                "tipo": "MUDANCA_ALINHAMENTO_VOTO",
+                "severidade": "baixa",
+                "descricao": (
+                    f"Trocou de {partido_antigo} para {partido_novo} no mes. Concordancia de voto com "
+                    f"a maioria do {partido_antigo} antes da troca: {concordancia_antiga:.0%} ({n_antigo} "
+                    f"votacoes comparaveis). Concordancia com a maioria do {partido_novo} depois da "
+                    f"troca: {concordancia_nova:.0%} ({n_novo} votacoes comparaveis)."
+                ),
+                "dados_suporte": {
+                    "partido_antigo": partido_antigo,
+                    "partido_novo": partido_novo,
+                    "concordancia_partido_antigo": float(concordancia_antiga),
+                    "concordancia_partido_novo": float(concordancia_nova),
+                    "n_votacoes_antigo": int(n_antigo),
+                    "n_votacoes_novo": int(n_novo),
+                },
+            }
+        )
+    return findings
+
+
 def rodar_regras_estatisticas(conn: sqlite3.Connection, mes_referencia: str) -> list[dict]:
     findings: list[dict] = []
     findings += detectar_outliers_gasto(conn, mes_referencia)
@@ -739,4 +856,5 @@ def rodar_regras_estatisticas(conn: sqlite3.Connection, mes_referencia: str) -> 
     findings += detectar_silencio_subito_discursos(conn, mes_referencia)
     findings += detectar_mudanca_foco_tematico(conn, mes_referencia)
     findings += detectar_baixa_atividade_geral(conn, mes_referencia)
+    findings += detectar_mudanca_alinhamento_voto(conn, mes_referencia)
     return findings

@@ -3,6 +3,7 @@ from senado_sentinel.detection.statistical import (
     detectar_concentracao_fornecedor,
     detectar_faltas,
     detectar_fornecedor_pouco_comum,
+    detectar_mudanca_alinhamento_voto,
     detectar_mudanca_foco_tematico,
     detectar_outliers_gasto,
     detectar_outliers_gasto_vs_pares,
@@ -521,3 +522,49 @@ def test_detectar_baixa_atividade_geral_nao_sinaliza_licenca(conn):
 
     findings = detectar_baixa_atividade_geral(conn, "2024-03")
     assert not any(f["deputado_id"] == 1 for f in findings)
+
+
+def test_detectar_mudanca_alinhamento_voto_reporta_concordancia_antes_e_depois(conn):
+    conn.execute("INSERT INTO legislaturas (id, data_inicio, data_fim) VALUES (57, '2023-02-01', '2027-01-31')")
+    _add_deputado(conn, 1, partido="NOVO")  # partido atual, pos-troca
+    _add_deputado(conn, 998, partido="NOVO")  # colega do partido novo
+    _add_deputado(conn, 999, partido="ANTIGO")  # colega do partido antigo
+    conn.commit()
+    conn.execute(
+        "INSERT INTO deputado_historico (deputado_id, legislatura_id, data_hora, sigla_partido) VALUES (1, 57, '2024-03-01T00:00', 'ANTIGO')"
+    )
+    conn.execute(
+        "INSERT INTO deputado_historico (deputado_id, legislatura_id, data_hora, sigla_partido) VALUES (1, 57, '2024-03-15T00:00', 'NOVO')"
+    )
+    conn.commit()
+
+    # antes da troca (jan-fev): deputado 1 e colega do ANTIGO sempre votam Sim juntos
+    for i, dia in enumerate(["2024-01-10", "2024-01-20", "2024-02-10"]):
+        vid = f"antes-{i}"
+        _add_votacao(conn, vid, dia)
+        _add_voto(conn, vid, 1, voto="Sim")
+        _add_voto(conn, vid, 999, voto="Sim")
+
+    # depois da troca (15/mar em diante): deputado 1 e colega do NOVO sempre votam Nao juntos
+    for i, dia in enumerate(["2024-03-16", "2024-03-20", "2024-03-25"]):
+        vid = f"depois-{i}"
+        _add_votacao(conn, vid, dia)
+        _add_voto(conn, vid, 1, voto="Não")
+        _add_voto(conn, vid, 998, voto="Não")
+    conn.commit()
+
+    findings = detectar_mudanca_alinhamento_voto(conn, "2024-03", meses_janela=6)
+
+    assert len(findings) == 1
+    f = findings[0]
+    assert f["deputado_id"] == 1
+    assert f["tipo"] == "MUDANCA_ALINHAMENTO_VOTO"
+    assert f["dados_suporte"]["concordancia_partido_antigo"] == 1.0
+    assert f["dados_suporte"]["concordancia_partido_novo"] == 1.0
+
+
+def test_detectar_mudanca_alinhamento_voto_ignora_sem_troca_no_mes(conn):
+    _add_deputado(conn, 1, partido="X")
+    conn.commit()
+    findings = detectar_mudanca_alinhamento_voto(conn, "2024-03")
+    assert findings == []
