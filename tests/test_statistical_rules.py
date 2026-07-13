@@ -160,3 +160,63 @@ def test_detectar_faltas_ignora_votacoes_simbolicas_sem_voto_individual(conn):
     assert 2 in ids_com_finding
     finding_dep2 = next(f for f in findings if f["deputado_id"] == 2)
     assert finding_dep2["dados_suporte"]["votacoes_no_mes"] == 1
+
+
+def _add_historico(conn, dep_id, legislatura_id, data_hora, situacao):
+    conn.execute(
+        "INSERT INTO deputado_historico (deputado_id, legislatura_id, data_hora, situacao) VALUES (?, ?, ?, ?)",
+        (dep_id, legislatura_id, data_hora, situacao),
+    )
+
+
+def test_detectar_faltas_nao_conta_ausencia_durante_licenca(conn):
+    """Falta durante um periodo de Licenca oficial (afastamento medico,
+    maternidade, missao etc) nao e uma ausencia suspeita - nao deve entrar na
+    taxa que dispara o alerta, mas deve ficar registrada separadamente em
+    dados_suporte para transparencia."""
+    conn.execute("INSERT INTO legislaturas (id, data_inicio, data_fim) VALUES (57, '2023-02-01', '2027-01-31')")
+    _add_deputado(conn, 1)
+    _add_deputado(conn, 999)
+    conn.commit()
+    # entra de licenca em 1/jun, sem data de retorno registrada ainda
+    _add_historico(conn, 1, 57, "2023-02-01T00:00", "Exercício")
+    _add_historico(conn, 1, 57, "2026-06-01T00:00", "Licença")
+    conn.commit()
+
+    # 5 votacoes nominais no mes, o deputado nao vota em nenhuma (esta de licenca)
+    for i in range(5):
+        votacao_id = f"nom-{i}"
+        _add_votacao(conn, votacao_id, f"2026-06-{10+i:02d}")
+        _add_voto(conn, votacao_id, 999)  # outro deputado qualquer vota, torna a votacao "nominal"
+    conn.commit()
+
+    findings = detectar_faltas(conn, "2026-06")
+
+    # em licenca o mes inteiro -> nao deve gerar alerta de ausencia sem justificativa
+    assert not any(f["deputado_id"] == 1 for f in findings)
+
+
+def test_detectar_faltas_diferencia_licenca_de_sem_justificativa(conn):
+    """Deputado que falta PARTE do mes em licenca e parte SEM licenca - so a
+    parte sem licenca conta pra taxa que dispara o alerta."""
+    conn.execute("INSERT INTO legislaturas (id, data_inicio, data_fim) VALUES (57, '2023-02-01', '2027-01-31')")
+    _add_deputado(conn, 1)
+    _add_deputado(conn, 999)
+    conn.commit()
+    _add_historico(conn, 1, 57, "2023-02-01T00:00", "Exercício")
+    _add_historico(conn, 1, 57, "2026-06-01T00:00", "Licença")
+    _add_historico(conn, 1, 57, "2026-06-15T00:00", "Exercício")  # volta da licenca no meio do mes
+    conn.commit()
+
+    # 2 votacoes durante a licenca (dias 5, 10) + 3 depois que voltou (dias 20, 21, 22), todas perdidas
+    for dia, votacao_id in [(5, "v1"), (10, "v2"), (20, "v3"), (21, "v4"), (22, "v5")]:
+        _add_votacao(conn, votacao_id, f"2026-06-{dia:02d}")
+        _add_voto(conn, votacao_id, 999)
+    conn.commit()
+
+    findings = detectar_faltas(conn, "2026-06")
+
+    finding = next(f for f in findings if f["deputado_id"] == 1)
+    assert finding["dados_suporte"]["faltas_licenca"] == 2
+    assert finding["dados_suporte"]["faltas_sem_justificativa"] == 3
+    assert finding["dados_suporte"]["taxa_ausencia_sem_justificativa"] == 3 / 5

@@ -7,11 +7,14 @@ de referencia dados.
 
 from __future__ import annotations
 
+import bisect
 import sqlite3
 
 import pandas as pd
 
 from senado_sentinel.config import FALTA_INJUSTIFICADA_TAXA_LIMIAR, GASTO_ZSCORE_LIMIAR
+
+SITUACAO_LICENCA = "Licença"
 
 
 def _severidade_por_zscore(zscore: float) -> str:
@@ -132,21 +135,60 @@ def detectar_concentracao_fornecedor(conn: sqlite3.Connection, mes_referencia: s
     return findings
 
 
+def _mapa_situacao_por_data(conn: sqlite3.Connection) -> dict[int, tuple[list[str], list[str]]]:
+    """Para cada deputado, a timeline de situacao (Exercicio/Licenca/etc) ordenada
+    por data - usado para descobrir qual era a situacao dele numa data especifica
+    (a ultima mudanca de status registrada ate aquela data, inclusive).
+
+    Retorna {deputado_id: (datas_ordenadas, situacoes_correspondentes)}, pronto
+    para busca binaria (bisect) por data.
+    """
+    df = pd.read_sql_query(
+        """
+        SELECT deputado_id, substr(data_hora, 1, 10) AS data, situacao
+        FROM deputado_historico
+        WHERE data_hora IS NOT NULL
+        ORDER BY deputado_id, data_hora
+        """,
+        conn,
+    )
+    mapa: dict[int, tuple[list[str], list[str]]] = {}
+    for deputado_id, grupo in df.groupby("deputado_id"):
+        mapa[deputado_id] = (grupo["data"].tolist(), grupo["situacao"].tolist())
+    return mapa
+
+
+def _situacao_na_data(mapa: dict[int, tuple[list[str], list[str]]], deputado_id: int, data: str) -> str | None:
+    entrada = mapa.get(deputado_id)
+    if not entrada:
+        return None
+    datas, situacoes = entrada
+    idx = bisect.bisect_right(datas, data) - 1
+    return situacoes[idx] if idx >= 0 else None
+
+
 def detectar_faltas(conn: sqlite3.Connection, mes_referencia: str) -> list[dict]:
-    """Taxa de ausencia (votacoes nominais do Plenario sem voto registrado) no mes.
+    """Taxa de ausencia SEM JUSTIFICATIVA (votacoes nominais do Plenario sem voto
+    registrado, com o deputado fora de licenca oficial naquela data) no mes.
 
-    A API nao expoe motivo de ausencia (ver docs/spikes) - a ausencia e
-    inferida por exclusao: deputado nao aparece entre os votos de uma votacao.
+    A API nao expoe um campo formal de "motivo de ausencia" por votacao, entao
+    a ausencia e inferida por exclusao (deputado nao aparece entre os votos de
+    uma votacao). Duas correcoes sobre essa inferencia bruta:
 
-    So conta votacoes NOMINAIS (que tem pelo menos um voto individual
-    registrado) no denominador - a maioria das votacoes do Plenario e
-    simbolica/por unanimidade e a API nao devolve voto individual de
-    ninguem nesses casos, o que inflaria a "ausencia" de todo mundo por
-    igual se fossem contadas.
+    - So conta votacoes NOMINAIS (com pelo menos um voto individual
+      registrado) no denominador - a maioria das votacoes do Plenario e
+      simbolica/por unanimidade e a API nao devolve voto individual de
+      ninguem nesses casos, o que inflaria a ausencia de todo mundo por igual.
+    - Falta durante um periodo de "Licenca" oficial (registrado no historico
+      do deputado - afastamento medico, maternidade, missao etc) NAO conta
+      como ausencia sem justificativa; e contabilizada separadamente em
+      `dados_suporte.faltas_licenca` para transparencia, mas nao entra na
+      taxa que dispara o alerta. "Obstrucao" (tatica de plenario) ja aparece
+      como um voto registrado normal e nao e afetada por essa distincao.
     """
     votacoes_mes = pd.read_sql_query(
         """
-        SELECT DISTINCT v.id FROM votacoes v
+        SELECT DISTINCT v.id, v.data FROM votacoes v
         JOIN votos vo ON vo.votacao_id = v.id
         WHERE strftime('%Y-%m', v.data) = ?
         """,
@@ -158,32 +200,50 @@ def detectar_faltas(conn: sqlite3.Connection, mes_referencia: str) -> list[dict]
     total_votacoes_mes = len(votacoes_mes)
 
     deputados = pd.read_sql_query("SELECT id FROM deputados", conn)["id"].tolist()
+    mapa_situacao = _mapa_situacao_por_data(conn)
+
+    votos_mes = pd.read_sql_query(
+        """
+        SELECT deputado_id, votacao_id FROM votos
+        WHERE votacao_id IN (SELECT id FROM votacoes WHERE strftime('%Y-%m', data) = ?)
+        """,
+        conn,
+        params=(mes_referencia,),
+    )
+    votadas_por_deputado = votos_mes.groupby("deputado_id")["votacao_id"].apply(set).to_dict()
 
     findings = []
     for deputado_id in deputados:
-        votos_registrados = conn.execute(
-            """
-            SELECT COUNT(*) FROM votos
-            WHERE deputado_id = ? AND votacao_id IN (SELECT id FROM votacoes WHERE strftime('%Y-%m', data) = ?)
-            """,
-            (deputado_id, mes_referencia),
-        ).fetchone()[0]
-        taxa_falta = 1 - (votos_registrados / total_votacoes_mes)
-        if taxa_falta >= FALTA_INJUSTIFICADA_TAXA_LIMIAR:
+        votadas = votadas_por_deputado.get(deputado_id, set())
+        faltas_licenca = 0
+        faltas_sem_justificativa = 0
+        for votacao in votacoes_mes.itertuples():
+            if votacao.id in votadas:
+                continue
+            situacao = _situacao_na_data(mapa_situacao, deputado_id, votacao.data)
+            if situacao == SITUACAO_LICENCA:
+                faltas_licenca += 1
+            else:
+                faltas_sem_justificativa += 1
+
+        taxa_sem_justificativa = faltas_sem_justificativa / total_votacoes_mes
+        if taxa_sem_justificativa >= FALTA_INJUSTIFICADA_TAXA_LIMIAR:
+            complemento = f" (mais {faltas_licenca} falta(s) durante licenca oficial, nao contabilizada(s) aqui)." if faltas_licenca else "."
             findings.append(
                 {
                     "deputado_id": int(deputado_id),
                     "tipo": "TAXA_AUSENCIA_ALTA",
-                    "severidade": "alta" if taxa_falta >= 0.6 else "media",
+                    "severidade": "alta" if taxa_sem_justificativa >= 0.6 else "media",
                     "descricao": (
-                        f"Ausente (sem voto registrado) em {taxa_falta:.0%} das {total_votacoes_mes} "
-                        f"votacoes nominais do Plenario no mes. Motivo da ausencia nao esta "
-                        f"disponivel na API - requer verificacao manual."
+                        f"Ausente sem licenca registrada (sem voto registrado) em {taxa_sem_justificativa:.0%} "
+                        f"das {total_votacoes_mes} votacoes nominais do Plenario no mes" + complemento +
+                        " O motivo especifico da ausencia nao esta disponivel na API - requer verificacao manual."
                     ),
                     "dados_suporte": {
                         "votacoes_no_mes": int(total_votacoes_mes),
-                        "votos_registrados": int(votos_registrados),
-                        "taxa_ausencia": float(taxa_falta),
+                        "faltas_sem_justificativa": int(faltas_sem_justificativa),
+                        "faltas_licenca": int(faltas_licenca),
+                        "taxa_ausencia_sem_justificativa": float(taxa_sem_justificativa),
                     },
                 }
             )

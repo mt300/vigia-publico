@@ -135,9 +135,10 @@ with aba_presenca:
         fig.update_yaxes(tickformat=".0%", range=[0, 1])
         st.plotly_chart(fig, use_container_width=True)
         st.caption(
-            "Presenca = votos registrados / votacoes NOMINAIS do Plenario no mes. "
-            "Votacoes simbolicas/por unanimidade nao entram na conta (a API nao "
-            "devolve voto individual de ninguem nesses casos)."
+            "Presenca bruta = votos registrados / votacoes NOMINAIS do Plenario no mes "
+            "(votacoes simbolicas/por unanimidade nao entram na conta). Este grafico NAO "
+            "desconta periodos de licenca oficial - para a taxa de ausencia SEM JUSTIFICATIVA "
+            "(que ja exclui licenca e e a base dos alertas), veja a aba Achados."
         )
 
 # --- aba: perfil do deputado ---------------------------------------------------

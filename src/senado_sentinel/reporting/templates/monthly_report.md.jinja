@@ -46,10 +46,14 @@ Fonte: {{ finding.fonte_url }}
 - **Gastos**: outliers calculados por z-score comparando o gasto do mes por categoria com a
   media historica do proprio deputado (ultimos 24 meses). Fornecedores concentrados sinalizam
   quando uma fracao grande do gasto do mes vai para um unico fornecedor.
-- **Presenca**: taxa de ausencia calculada por exclusao (deputado nao aparece entre os votos
-  registrados de uma votacao nominal do Plenario). A API da Camara nao expoe o motivo da
-  ausencia - vote nao encontrado nao significa necessariamente falta injustificada, requer
-  verificacao manual.
+- **Presenca**: taxa de ausencia SEM JUSTIFICATIVA, calculada por exclusao (deputado nao
+  aparece entre os votos registrados de uma votacao nominal do Plenario) e cruzada com o
+  status oficial do deputado naquela data. Falta durante um periodo de "Licenca" registrado
+  (afastamento medico, maternidade, missao etc) NAO conta para o alerta - fica registrada a
+  parte, em `faltas_licenca`, para transparencia. "Obstrucao" (tatica de plenario) ja aparece
+  como voto registrado e nao conta como ausencia. Ainda assim, a API da Camara nao expoe um
+  motivo formal por votacao individual - o numero e uma aproximacao e pode exigir verificacao
+  manual em casos-limite.
 - **Discursos**: incoerencia e conteudo suspeito sao sinalizados por um modelo de linguagem
   (Claude/Anthropic) com base em criterios objetivos e citacao literal do texto como evidencia.
   **Estes sao sinais heuristicos para revisao humana, nao vereditos ou acusacoes.**
