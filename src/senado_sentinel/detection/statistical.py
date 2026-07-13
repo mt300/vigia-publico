@@ -82,6 +82,145 @@ def detectar_outliers_gasto(conn: sqlite3.Connection, mes_referencia: str) -> li
     return findings
 
 
+def detectar_outliers_gasto_vs_pares(conn: sqlite3.Connection, mes_referencia: str, min_pares: int = 5) -> list[dict]:
+    """Compara o gasto do deputado por categoria no mes com a distribuicao de
+    gasto de OUTROS deputados do mesmo partido e do mesmo estado (UF) na mesma
+    categoria no mesmo mes - diferente de `detectar_outliers_gasto`, que
+    compara com o proprio historico. Mais forte para deputados novos, que nao
+    tem historico proprio longo o suficiente pro z-score individual.
+
+    So compara contra grupos com pelo menos `min_pares` colegas com gasto na
+    categoria naquele mes, pra evitar comparacao contra grupo pequeno demais
+    (numero instavel com poucos pontos).
+    """
+    ano, mes = (int(p) for p in mes_referencia.split("-"))
+    df = pd.read_sql_query(
+        """
+        SELECT e.deputado_id, d.sigla_partido, d.sigla_uf, e.tipo_despesa, SUM(e.valor_liquido) AS total
+        FROM despesas e JOIN deputados d ON d.id = e.deputado_id
+        WHERE e.ano = ? AND e.mes = ?
+        GROUP BY e.deputado_id, e.tipo_despesa
+        """,
+        conn,
+        params=(ano, mes),
+    )
+    if df.empty:
+        return []
+
+    findings = []
+    ja_sinalizado = set()  # (deputado_id, tipo_despesa) - evita duplicar se bater no limiar via partido E uf
+    for grupo_tipo, coluna_grupo in (("partido", "sigla_partido"), ("estado", "sigla_uf")):
+        for (grupo_valor, tipo_despesa), grupo_df in df.groupby([coluna_grupo, "tipo_despesa"]):
+            if len(grupo_df) < min_pares + 1:
+                continue
+            for row in grupo_df.itertuples():
+                chave = (row.deputado_id, tipo_despesa)
+                if chave in ja_sinalizado:
+                    continue
+                pares = grupo_df.loc[grupo_df["deputado_id"] != row.deputado_id, "total"]
+                if len(pares) < min_pares:
+                    continue
+                media, desvio = pares.mean(), pares.std(ddof=0)
+                if desvio == 0:
+                    continue
+                zscore = (row.total - media) / desvio
+                if zscore >= GASTO_ZSCORE_LIMIAR:
+                    ja_sinalizado.add(chave)
+                    findings.append(
+                        {
+                            "deputado_id": int(row.deputado_id),
+                            "tipo": "GASTO_OUTLIER_VS_PARES",
+                            "severidade": _severidade_por_zscore(zscore),
+                            "descricao": (
+                                f"Gasto em '{tipo_despesa}' de R$ {row.total:,.2f} no mes, "
+                                f"{zscore:.1f} desvios-padrao acima da media de {len(pares)} colegas "
+                                f"de {grupo_tipo} ({grupo_valor}) na mesma categoria (R$ {media:,.2f})."
+                            ),
+                            "dados_suporte": {
+                                "tipo_despesa": tipo_despesa,
+                                "valor_mes": float(row.total),
+                                "grupo_comparado": grupo_tipo,
+                                "grupo_valor": grupo_valor,
+                                "n_pares": int(len(pares)),
+                                "media_pares": float(media),
+                                "desvio_pares": float(desvio),
+                                "zscore": float(zscore),
+                            },
+                        }
+                    )
+    return findings
+
+
+CATEGORIAS_EXCLUIDAS_VALOR_REPETIDO = (
+    # Hospedagem gera falso positivo sistematico: hoteis costumam emitir uma
+    # nota por diaria e processar/datar todas no checkout, entao uma estadia
+    # de 3 noites legitima aparece como "3 notas identicas no mesmo dia" -
+    # confirmado com dados reais (48 dos 52 achados antes desse ajuste eram
+    # estadias de hotel com numeros de documento sequenciais, nao fracionamento).
+    "HOSPEDAGEM ,EXCETO DO PARLAMENTAR NO DISTRITO FEDERAL.",
+)
+
+
+def detectar_valores_repetidos(conn: sqlite3.Connection, mes_referencia: str, min_repeticoes: int = 3, valor_minimo: float = 100.0) -> list[dict]:
+    """Sinaliza quando o MESMO valor exato se repete varias vezes NO MESMO DIA
+    para o mesmo deputado+fornecedor - padrao de fracionamento (dividir uma
+    compra maior em varias notas menores no mesmo dia pra ficar abaixo de
+    algum limite de auditoria/aprovacao).
+
+    Exigir o MESMO DIA (nao so o mesmo mes) e essencial: despesas legitimas e
+    rotineiras (abastecimento semanal, mensalidade de servico) naturalmente
+    repetem o mesmo valor exato varias vezes no mes em DIAS diferentes - isso
+    nao e fracionamento, e so um valor fixo recorrente.
+
+    Hospedagem e excluida (ver `CATEGORIAS_EXCLUIDAS_VALOR_REPETIDO`) por
+    gerar falso positivo sistematico com estadias de varias noites.
+
+    `valor_minimo` evita ruido de pequenas cobrancas (ex: taxas de poucos reais).
+    """
+    ano, mes = (int(p) for p in mes_referencia.split("-"))
+    placeholders = ",".join("?" * len(CATEGORIAS_EXCLUIDAS_VALOR_REPETIDO))
+    df = pd.read_sql_query(
+        f"""
+        SELECT deputado_id, nome_fornecedor, tipo_despesa, valor_liquido,
+               substr(data_documento, 1, 10) AS data, COUNT(*) AS repeticoes
+        FROM despesas
+        WHERE ano = ? AND mes = ? AND valor_liquido >= ? AND data_documento IS NOT NULL
+          AND tipo_despesa NOT IN ({placeholders})
+        GROUP BY deputado_id, nome_fornecedor, valor_liquido, data
+        HAVING repeticoes >= ?
+        """,
+        conn,
+        params=(ano, mes, valor_minimo, *CATEGORIAS_EXCLUIDAS_VALOR_REPETIDO, min_repeticoes),
+    )
+    if df.empty:
+        return []
+
+    findings = []
+    for row in df.itertuples():
+        total = row.valor_liquido * row.repeticoes
+        findings.append(
+            {
+                "deputado_id": int(row.deputado_id),
+                "tipo": "VALOR_REPETIDO_SUSPEITO",
+                "severidade": "alta" if row.repeticoes >= 4 else "media",
+                "descricao": (
+                    f"Mesmo valor de R$ {row.valor_liquido:,.2f} repetido {row.repeticoes}x no mesmo dia "
+                    f"({row.data}) com o fornecedor '{row.nome_fornecedor}' em '{row.tipo_despesa}' "
+                    f"(total R$ {total:,.2f}) - possivel fracionamento de compra."
+                ),
+                "dados_suporte": {
+                    "fornecedor": row.nome_fornecedor,
+                    "tipo_despesa": row.tipo_despesa,
+                    "data": row.data,
+                    "valor_unitario": float(row.valor_liquido),
+                    "repeticoes": int(row.repeticoes),
+                    "total": float(total),
+                },
+            }
+        )
+    return findings
+
+
 def detectar_concentracao_fornecedor(conn: sqlite3.Connection, mes_referencia: str, limiar_pct: float = 0.6) -> list[dict]:
     """Sinaliza quando um unico fornecedor concentra uma fracao grande do gasto do mes.
 
@@ -284,6 +423,8 @@ def detectar_troca_partido(conn: sqlite3.Connection, mes_referencia: str) -> lis
 def rodar_regras_estatisticas(conn: sqlite3.Connection, mes_referencia: str) -> list[dict]:
     findings: list[dict] = []
     findings += detectar_outliers_gasto(conn, mes_referencia)
+    findings += detectar_outliers_gasto_vs_pares(conn, mes_referencia)
+    findings += detectar_valores_repetidos(conn, mes_referencia)
     findings += detectar_concentracao_fornecedor(conn, mes_referencia)
     findings += detectar_faltas(conn, mes_referencia)
     findings += detectar_troca_partido(conn, mes_referencia)

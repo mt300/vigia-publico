@@ -2,21 +2,30 @@ from senado_sentinel.detection.statistical import (
     detectar_concentracao_fornecedor,
     detectar_faltas,
     detectar_outliers_gasto,
+    detectar_outliers_gasto_vs_pares,
     detectar_troca_partido,
+    detectar_valores_repetidos,
 )
 
 
-def _add_deputado(conn, dep_id, nome="Teste"):
-    conn.execute("INSERT INTO deputados (id, nome_eleitoral) VALUES (?, ?)", (dep_id, nome))
+def _add_deputado(conn, dep_id, nome="Teste", partido=None, uf=None):
+    conn.execute(
+        "INSERT INTO deputados (id, nome_eleitoral, sigla_partido, sigla_uf) VALUES (?, ?, ?, ?)",
+        (dep_id, nome, partido, uf),
+    )
 
 
-def _add_despesa(conn, dep_id, ano, mes, tipo, valor, fornecedor="Fornecedor X"):
+def _add_despesa(conn, dep_id, ano, mes, tipo, valor, fornecedor="Fornecedor X", doc=None, data_documento=None):
+    uid = f"{dep_id}-{ano}-{mes}-{tipo}-{fornecedor}-{valor}"
+    if doc is not None:
+        uid += f"-{doc}"
+    data_documento = data_documento or f"{ano:04d}-{mes:02d}-01"
     conn.execute(
         """
-        INSERT INTO despesas (uid, deputado_id, ano, mes, tipo_despesa, nome_fornecedor, valor_liquido)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO despesas (uid, deputado_id, ano, mes, tipo_despesa, nome_fornecedor, valor_liquido, data_documento)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (f"{dep_id}-{ano}-{mes}-{tipo}-{fornecedor}-{valor}", dep_id, ano, mes, tipo, fornecedor, valor),
+        (uid, dep_id, ano, mes, tipo, fornecedor, valor, data_documento),
     )
 
 
@@ -59,6 +68,111 @@ def test_detectar_outliers_gasto_nao_sinaliza_gasto_estavel(conn):
     conn.commit()
 
     findings = detectar_outliers_gasto(conn, "2024-07")
+    assert findings == []
+
+
+def test_detectar_outliers_gasto_vs_pares_sinaliza_muito_acima_do_partido(conn):
+    """Deputado novo (sem historico proprio) que gasta muito mais que os
+    colegas de partido na mesma categoria e no mesmo mes - nao pega no
+    z-score individual (precisa de historico), mas pega na comparacao com
+    pares, que e o ponto dessa regra."""
+    for i in range(1, 6):
+        _add_deputado(conn, i, partido="PXX", uf="SP")
+        _add_despesa(conn, i, 2024, 7, "COMBUSTIVEIS", 1000 + i * 10)
+    _add_deputado(conn, 99, partido="PXX", uf="RJ")
+    _add_despesa(conn, 99, 2024, 7, "COMBUSTIVEIS", 20000)
+    conn.commit()
+
+    findings = detectar_outliers_gasto_vs_pares(conn, "2024-07", min_pares=5)
+
+    ids_sinalizados = {f["deputado_id"] for f in findings}
+    assert 99 in ids_sinalizados
+    assert not ({1, 2, 3, 4, 5} & ids_sinalizados)
+    finding = next(f for f in findings if f["deputado_id"] == 99)
+    assert finding["tipo"] == "GASTO_OUTLIER_VS_PARES"
+    assert finding["dados_suporte"]["n_pares"] == 5
+
+
+def test_detectar_outliers_gasto_vs_pares_ignora_grupo_pequeno_demais(conn):
+    """Com menos colegas que min_pares, a comparacao nao e confiavel - nao
+    deveria sinalizar nada."""
+    for i in range(1, 3):
+        _add_deputado(conn, i, partido="PXX", uf="SP")
+        _add_despesa(conn, i, 2024, 7, "COMBUSTIVEIS", 1000)
+    _add_deputado(conn, 99, partido="PXX", uf="RJ")
+    _add_despesa(conn, 99, 2024, 7, "COMBUSTIVEIS", 20000)
+    conn.commit()
+
+    findings = detectar_outliers_gasto_vs_pares(conn, "2024-07", min_pares=5)
+    assert findings == []
+
+
+def test_detectar_valores_repetidos_sinaliza_fracionamento(conn):
+    _add_deputado(conn, 1)
+    for i in range(4):
+        _add_despesa(conn, 1, 2024, 3, "MANUTENCAO", 999.90, fornecedor="Fornecedor Suspeito", doc=i)
+    conn.commit()
+
+    findings = detectar_valores_repetidos(conn, "2024-03", min_repeticoes=3)
+
+    assert len(findings) == 1
+    assert findings[0]["tipo"] == "VALOR_REPETIDO_SUSPEITO"
+    assert findings[0]["dados_suporte"]["repeticoes"] == 4
+    assert findings[0]["dados_suporte"]["total"] == 999.90 * 4
+
+
+def test_detectar_valores_repetidos_ignora_hospedagem(conn):
+    """Regressao: descoberto com dados reais de producao - hoteis costumam
+    emitir uma nota por diaria, todas processadas/datadas no checkout, entao
+    uma estadia legitima de varias noites aparece como 'N notas identicas no
+    mesmo dia'. Confirmado com numeros de documento sequenciais nos dados
+    reais (nao e fracionamento, e cobranca normal de hospedagem)."""
+    _add_deputado(conn, 1)
+    for i in range(3):
+        _add_despesa(
+            conn, 1, 2024, 3, "HOSPEDAGEM ,EXCETO DO PARLAMENTAR NO DISTRITO FEDERAL.",
+            538.0, fornecedor="Hotel Exemplo", doc=i,
+        )
+    conn.commit()
+
+    findings = detectar_valores_repetidos(conn, "2024-03", min_repeticoes=3)
+    assert findings == []
+
+
+def test_detectar_valores_repetidos_ignora_poucas_repeticoes(conn):
+    _add_deputado(conn, 1)
+    _add_despesa(conn, 1, 2024, 3, "MANUTENCAO", 999.90, fornecedor="Fornecedor Normal", doc=1)
+    _add_despesa(conn, 1, 2024, 3, "MANUTENCAO", 999.90, fornecedor="Fornecedor Normal", doc=2)
+    conn.commit()
+
+    findings = detectar_valores_repetidos(conn, "2024-03", min_repeticoes=3)
+    assert findings == []
+
+
+def test_detectar_valores_repetidos_ignora_valores_pequenos(conn):
+    _add_deputado(conn, 1)
+    for i in range(5):
+        _add_despesa(conn, 1, 2024, 3, "MANUTENCAO", 10.0, fornecedor="Fornecedor Barato", doc=i)
+    conn.commit()
+
+    findings = detectar_valores_repetidos(conn, "2024-03", min_repeticoes=3, valor_minimo=100.0)
+    assert findings == []
+
+
+def test_detectar_valores_repetidos_ignora_repeticoes_em_dias_diferentes(conn):
+    """Regressao: descoberto com dados reais de producao - abastecimento
+    semanal de combustivel no mesmo posto pelo mesmo valor exato (ex: sempre
+    R$150) em datas DIFERENTES nao e fracionamento, e so um valor recorrente
+    legitimo. So repeticao no MESMO DIA e um sinal especifico o suficiente."""
+    _add_deputado(conn, 1)
+    for dia in (11, 15, 27):
+        _add_despesa(
+            conn, 1, 2024, 3, "COMBUSTIVEIS", 150.0, fornecedor="Posto Exemplo",
+            doc=dia, data_documento=f"2024-03-{dia:02d}",
+        )
+    conn.commit()
+
+    findings = detectar_valores_repetidos(conn, "2024-03", min_repeticoes=3, valor_minimo=100.0)
     assert findings == []
 
 

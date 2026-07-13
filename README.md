@@ -52,10 +52,32 @@ mes anterior (ja fechado). Teste o `.bat` manualmente antes de agendar.
 - Universo de dados: os deputados EM EXERCICIO agora, com o historico completo
   de TODOS os mandatos federais anteriores deles (nao o histórico de todo
   mundo que ja passou pela Camara).
-- A API nao expoe o motivo de uma falta (justificada/injustificada) em
-  votacoes - a ausencia e inferida por exclusao (deputado nao aparece entre os
-  votos registrados de uma votacao nominal). Ver `detection/statistical.py`.
+- A API nao expoe um campo formal de motivo de ausencia por votacao - a
+  ausencia e inferida por exclusao (deputado nao aparece entre os votos
+  registrados de uma votacao nominal), cruzada com o status oficial do
+  deputado na data (falta durante "Licenca" registrada nao conta pro
+  alerta). Ainda assim e uma aproximacao para casos-limite. Ver
+  `detection/statistical.py`.
 - Achados gerados por LLM sao sinais heuristicos para revisao humana, nunca
   veredito ou acusacao.
 - Fase 2 (redes sociais) ainda nao implementada - os links ja sao coletados e
   armazenados em `deputado_redes_sociais` para uso futuro.
+
+## Ideias futuras (precisam de dados externos)
+
+Analises que agregariam bastante mas exigem importar uma base de dados nova,
+fora do escopo atual (so API da Camara):
+
+- **CNPJ do fornecedor x Receita Federal**: idade da empresa, capital social,
+  quadro societario - para detectar fornecedor "de fachada" recem-aberto ou
+  com socios em comum entre varios fornecedores usados pelo mesmo deputado.
+- **Doacoes de campanha (TSE)**: cruzar doador de campanha x fornecedor de
+  despesa parlamentar x tema de voto - provavelmente a analise mais reveladora
+  de todas, mas exige importar e casar uma base de dados totalmente nova
+  (prestacao de contas eleitorais do TSE).
+- **Proposicoes/projetos de lei**: nao e um dado externo de verdade (vem da
+  mesma API da Camara, endpoint `/proposicoes`, so ainda nao foi ingerido) -
+  mas exige uma nova tabela e pipeline de ingestao. Mediria producao
+  legislativa alem de discurso/voto, e permitiria cruzar tema das
+  proposicoes com tema dos discursos e com fornecedores de despesa do mesmo
+  setor.
