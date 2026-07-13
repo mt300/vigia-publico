@@ -1,0 +1,87 @@
+"""Gera o relatorio mensal (Markdown) a partir dos findings gravados no banco."""
+
+from __future__ import annotations
+
+import datetime as dt
+import json
+import sqlite3
+from pathlib import Path
+
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+
+from senado_sentinel.config import REPORTS_DIR
+
+TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
+
+
+def _carregar_findings_por_deputado(conn: sqlite3.Connection, mes_referencia: str) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT f.*, d.nome_eleitoral, d.sigla_partido, d.sigla_uf
+        FROM findings f
+        JOIN deputados d ON d.id = f.deputado_id
+        WHERE f.mes_referencia = ?
+        ORDER BY d.nome_eleitoral, f.severidade DESC
+        """,
+        (mes_referencia,),
+    ).fetchall()
+
+    por_deputado: dict[int, dict] = {}
+    for row in rows:
+        dep_id = row["deputado_id"]
+        if dep_id not in por_deputado:
+            por_deputado[dep_id] = {
+                "nome_eleitoral": row["nome_eleitoral"],
+                "sigla_partido": row["sigla_partido"],
+                "sigla_uf": row["sigla_uf"],
+                "findings": [],
+            }
+        por_deputado[dep_id]["findings"].append(
+            {
+                "tipo": row["tipo"],
+                "severidade": row["severidade"],
+                "descricao": row["descricao"],
+                "dados_suporte": json.loads(row["dados_suporte"]) if row["dados_suporte"] else None,
+                "fonte_url": row["fonte_url"],
+            }
+        )
+    return list(por_deputado.values())
+
+
+def build_report(conn: sqlite3.Connection, mes_referencia: str, output_dir: Path = REPORTS_DIR) -> Path:
+    deputados_com_achados = _carregar_findings_por_deputado(conn, mes_referencia)
+
+    contagem_por_tipo: dict[str, int] = {}
+    for dep in deputados_com_achados:
+        for finding in dep["findings"]:
+            contagem_por_tipo[finding["tipo"]] = contagem_por_tipo.get(finding["tipo"], 0) + 1
+
+    ranking = sorted(
+        (
+            {
+                "nome_eleitoral": dep["nome_eleitoral"],
+                "sigla_partido": dep["sigla_partido"],
+                "sigla_uf": dep["sigla_uf"],
+                "total": len(dep["findings"]),
+            }
+            for dep in deputados_com_achados
+        ),
+        key=lambda item: item["total"],
+        reverse=True,
+    )
+
+    env = Environment(loader=FileSystemLoader(TEMPLATES_DIR), autoescape=select_autoescape(enabled_extensions=()))
+    template = env.get_template("monthly_report.md.jinja")
+    conteudo = template.render(
+        mes_referencia=mes_referencia,
+        gerado_em=dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
+        total_findings=sum(contagem_por_tipo.values()),
+        contagem_por_tipo=contagem_por_tipo,
+        ranking=ranking,
+        deputados_com_achados=deputados_com_achados,
+    )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / f"{mes_referencia}.md"
+    output_path.write_text(conteudo, encoding="utf-8")
+    return output_path

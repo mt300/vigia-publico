@@ -1,0 +1,33 @@
+{
+  "id": 204379,
+  "uri": "https://dadosabertos.camara.leg.br/api/v2/deputados/204379",
+  "nomeCivil": "ACACIO FAVACHO MEDEIROS",
+  "cpf": "00000000000",
+  "sexo": "M",
+  "urlWebsite": null,
+  "redeSocial": ["https://twitter.com/acaciofavacho", "https://instagram.com/acaciofavacho"],
+  "dataNascimento": "1988-01-01",
+  "dataFalecimento": null,
+  "ufNascimento": "AP",
+  "municipioNascimento": "Macapa",
+  "escolaridade": "Superior",
+  "ultimoStatus": {
+    "id": 204379,
+    "nome": "Acacio Favacho",
+    "siglaPartido": "MDB",
+    "siglaUf": "AP",
+    "idLegislatura": 57,
+    "nomeEleitoral": "Acacio Favacho",
+    "gabinete": {
+      "nome": "414",
+      "predio": "4",
+      "sala": "414",
+      "andar": "4",
+      "telefone": "3215-5414",
+      "email": "dep.acaciofavacho@camara.leg.br"
+    },
+    "situacao": "Exercicio",
+    "condicaoEleitoral": "Titular",
+    "descricaoStatus": null
+  }
+}

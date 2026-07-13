@@ -1,0 +1,19 @@
+{
+  "ano": 2024,
+  "mes": 3,
+  "tipoDespesa": "MANUTENCAO DE ESCRITORIO DE APOIO",
+  "codDocumento": "7705408",
+  "tipoDocumento": "Nota Fiscal",
+  "codTipoDocumento": 0,
+  "dataDocumento": "2024-03-19T00:00:00",
+  "numDocumento": "518",
+  "valorDocumento": 1050.0,
+  "urlDocumento": "https://www.camara.leg.br/cota-parlamentar/documentos/publ/3687/2024/7705408.pdf",
+  "nomeFornecedor": "BROAD BRASIL LTDA",
+  "cnpjCpfFornecedor": "48949641000113",
+  "valorLiquido": 1050.0,
+  "valorGlosa": 0.0,
+  "numRessarcimento": "",
+  "codLote": 2023037,
+  "parcela": 0
+}

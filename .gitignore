@@ -1,0 +1,26 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Segredos
+.env
+
+# Dados locais (banco, logs, relatórios renderizados)
+data/*.db
+data/*.db-*
+logs/*.log
+logs/*.log.*
+reports/*.html
+
+.pytest_cache/
+
+# Artefatos do harness do Claude Code (nao faz parte do projeto)
+.claude/
+

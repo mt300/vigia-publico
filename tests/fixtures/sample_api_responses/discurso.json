@@ -1,0 +1,13 @@
+{
+  "dataHoraInicio": "2024-03-27T14:40",
+  "dataHoraFim": null,
+  "uriEvento": "",
+  "faseEvento": {"titulo": "Breves Comunicacoes", "dataHoraInicio": null, "dataHoraFim": null},
+  "tipoDiscurso": "BREVES COMUNICACOES",
+  "urlTexto": "https://imagem.camara.gov.br/dc_20b.asp?exemplo=1",
+  "urlAudio": null,
+  "urlVideo": null,
+  "keywords": "Educacao, Ensino publico",
+  "sumario": "Resumo de teste do discurso.",
+  "transcricao": "Texto completo de teste do discurso, usado apenas em testes automatizados."
+}
