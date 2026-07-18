@@ -15,10 +15,18 @@ COPY src ./src
 
 RUN pip install --no-cache-dir -r src/vigia_publico/dashboard/requirements.txt
 
+# .streamlit/config.toml (tema) - Streamlit le do cwd (WORKDIR /app), sem
+# isso o container sobe com o tema azul/branco padrao em vez da marca.
+COPY .streamlit ./.streamlit
 COPY public_data ./public_data
 
 RUN chown -R app:app /app
 USER app
+# `useradd -r` (sistema) nao cria /home/app - sem isso, o Streamlit tenta
+# escrever config/telemetria (~/.streamlit/credentials.toml) num diretorio
+# que nao existe/nao e gravavel e falha com PermissionError em runtime (so
+# aparece nos logs, o healthcheck HTTP nao pega). /app ja e do usuario app.
+ENV HOME=/app
 
 EXPOSE 8501
 

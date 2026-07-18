@@ -133,6 +133,34 @@ def get_despesas_por_categoria(
     return _query(conn, sql, tuple([mes_inicio, mes_fim] + params))
 
 
+def get_despesas_detalhado(
+    conn: sqlite3.Connection,
+    mes_inicio: str,
+    mes_fim: str,
+    partidos: tuple[str, ...] = (),
+    ufs: tuple[str, ...] = (),
+    deputado_id: int | None = None,
+    limite: int = 300,
+) -> pd.DataFrame:
+    """Despesas individuais (uma linha por nota/documento), nao agregadas -
+    pra quem quer ver o detalhe por tras dos totais (fornecedor, data, valor,
+    link pro documento). Ordenado pelas maiores primeiro e limitado
+    (`limite`) porque sem filtro de deputado o resultado pode ter centenas
+    de milhares de linhas - ver `views.py` pro aviso de que a lista pode
+    estar truncada."""
+    filtro, params = _filtro_deputados(partidos, ufs, deputado_id)
+    sql = f"""
+        SELECT d.nome_eleitoral, d.sigla_partido, d.sigla_uf, e.data_documento,
+               e.tipo_despesa, e.nome_fornecedor, e.valor_liquido, e.url_documento
+        FROM despesas e
+        JOIN deputados d ON d.id = e.deputado_id
+        WHERE printf('%04d-%02d', e.ano, e.mes) >= ? AND printf('%04d-%02d', e.ano, e.mes) <= ? {filtro}
+        ORDER BY e.valor_liquido DESC
+        LIMIT ?
+    """
+    return _query(conn, sql, tuple([mes_inicio, mes_fim] + params + [limite]))
+
+
 def get_ranking_gasto(
     conn: sqlite3.Connection,
     mes_inicio: str,

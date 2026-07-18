@@ -12,7 +12,7 @@ import sqlite3
 
 import pandas as pd
 
-from vigia_publico.config import FALTA_INJUSTIFICADA_TAXA_LIMIAR, GASTO_ZSCORE_LIMIAR
+from vigia_publico.config import CAMARA_API_BASE_URL, FALTA_INJUSTIFICADA_TAXA_LIMIAR, GASTO_ZSCORE_LIMIAR
 
 SITUACAO_LICENCA = "Licença"
 
@@ -23,6 +23,26 @@ def _severidade_por_zscore(zscore: float) -> str:
     if abs(zscore) >= GASTO_ZSCORE_LIMIAR:
         return "media"
     return "baixa"
+
+
+# `fonte_url` de cada achado: link pro dado bruto por tras do numero
+# agregado, na mesma API publica (Dados Abertos da Camara) que a ingestao ja
+# usa - qualquer pessoa pode abrir e conferir por conta propria, sem
+# depender do calculo do Vigia Publico.
+def _fonte_despesas(deputado_id: int, ano: int, mes: int) -> str:
+    return f"{CAMARA_API_BASE_URL}/deputados/{deputado_id}/despesas?ano={ano}&mes={mes}"
+
+
+def _fonte_perfil(deputado_id: int) -> str:
+    return f"{CAMARA_API_BASE_URL}/deputados/{deputado_id}"
+
+
+def _fonte_historico(deputado_id: int) -> str:
+    return f"{CAMARA_API_BASE_URL}/deputados/{deputado_id}/historico"
+
+
+def _fonte_discursos(deputado_id: int, data_inicio: str, data_fim: str) -> str:
+    return f"{CAMARA_API_BASE_URL}/deputados/{deputado_id}/discursos?dataInicio={data_inicio}&dataFim={data_fim}"
 
 
 def detectar_outliers_gasto(conn: sqlite3.Connection, mes_referencia: str) -> list[dict]:
@@ -77,6 +97,7 @@ def detectar_outliers_gasto(conn: sqlite3.Connection, mes_referencia: str) -> li
                         "desvio_historico": float(desvio),
                         "zscore": float(zscore),
                     },
+                    "fonte_url": _fonte_despesas(int(deputado_id), ano, mes),
                 }
             )
     return findings
@@ -146,6 +167,7 @@ def detectar_outliers_gasto_vs_pares(conn: sqlite3.Connection, mes_referencia: s
                                 "desvio_pares": float(desvio),
                                 "zscore": float(zscore),
                             },
+                            "fonte_url": _fonte_despesas(int(row.deputado_id), ano, mes),
                         }
                     )
     return findings
@@ -216,6 +238,7 @@ def detectar_valores_repetidos(conn: sqlite3.Connection, mes_referencia: str, mi
                     "repeticoes": int(row.repeticoes),
                     "total": float(total),
                 },
+                "fonte_url": _fonte_despesas(int(row.deputado_id), ano, mes),
             }
         )
     return findings
@@ -291,6 +314,7 @@ def detectar_fornecedor_pouco_comum(
                     "valor_mes": float(row.total),
                     "n_deputados_historico": int(row.n_deputados),
                 },
+                "fonte_url": _fonte_despesas(int(row.deputado_id), ano, mes),
             }
         )
     return findings
@@ -344,6 +368,7 @@ def detectar_concentracao_fornecedor(conn: sqlite3.Connection, mes_referencia: s
                         "total_mes": float(total_deputado),
                         "fracao": float(fracao),
                     },
+                    "fonte_url": _fonte_despesas(int(deputado_id), ano, mes),
                 }
             )
     return findings
@@ -483,6 +508,7 @@ def detectar_faltas(conn: sqlite3.Connection, mes_referencia: str) -> list[dict]
                         "faltas_licenca": int(row.faltas_licenca),
                         "taxa_ausencia_sem_justificativa": float(row.taxa_sem_justificativa),
                     },
+                    "fonte_url": _fonte_perfil(int(row.deputado_id)),
                 }
             )
     return findings
@@ -514,6 +540,7 @@ def detectar_troca_partido(conn: sqlite3.Connection, mes_referencia: str) -> lis
                     "severidade": "baixa",
                     "descricao": f"Mudanca de partido registrada no mes: {' -> '.join(partidos)}.",
                     "dados_suporte": {"partidos": partidos},
+                    "fonte_url": _fonte_historico(int(deputado_id)),
                 }
             )
     return findings
@@ -538,6 +565,7 @@ def detectar_silencio_subito_discursos(
     padrao estabelecido, nao o silencio absoluto.
     """
     inicio_janela = _meses_atras(mes_referencia, meses_historico)
+    fim_janela = _meses_atras(mes_referencia, -1)  # inicio do mes seguinte ao de referencia
     historico = pd.read_sql_query(
         """
         SELECT deputado_id, COUNT(*) AS n
@@ -579,6 +607,7 @@ def detectar_silencio_subito_discursos(
                         "total_periodo_anterior": int(row.n),
                         "meses_historico": meses_historico,
                     },
+                    "fonte_url": _fonte_discursos(int(row.deputado_id), f"{inicio_janela}-01", f"{fim_janela}-01"),
                 }
             )
     return findings
@@ -612,6 +641,7 @@ def detectar_mudanca_foco_tematico(
     anterior) - sem isso nao ha "padrao usual" pra comparar.
     """
     inicio_janela = _meses_atras(mes_referencia, meses_historico)
+    fim_janela = _meses_atras(mes_referencia, -1)  # inicio do mes seguinte ao de referencia
     historico = pd.read_sql_query(
         """
         SELECT deputado_id, keywords FROM discursos
@@ -672,6 +702,7 @@ def detectar_mudanca_foco_tematico(
                         "temas_historico_amostra": sorted(termos_hist)[:10],
                         "temas_mes": sorted(termos_atual),
                     },
+                    "fonte_url": _fonte_discursos(int(deputado_id), f"{inicio_janela}-01", f"{fim_janela}-01"),
                 }
             )
     return findings
@@ -722,6 +753,7 @@ def detectar_baixa_atividade_geral(conn: sqlite3.Connection, mes_referencia: str
                     f"mandato aparentemente inativo no mes, requer verificacao manual."
                 ),
                 "dados_suporte": {"votacoes_no_mes": int(total_votacoes_mes)},
+                "fonte_url": _fonte_perfil(int(deputado_id)),
             }
         )
     return findings
@@ -839,6 +871,7 @@ def detectar_mudanca_alinhamento_voto(conn: sqlite3.Connection, mes_referencia: 
                     "n_votacoes_antigo": int(n_antigo),
                     "n_votacoes_novo": int(n_novo),
                 },
+                "fonte_url": _fonte_historico(int(deputado_id)),
             }
         )
     return findings

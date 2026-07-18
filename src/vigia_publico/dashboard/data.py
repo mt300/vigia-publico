@@ -100,6 +100,19 @@ def get_despesas_por_categoria(
 
 
 @st.cache_data(ttl=CACHE_TTL_SEGUNDOS)
+def get_despesas_detalhado(
+    mes_inicio: str,
+    mes_fim: str,
+    partidos: tuple[str, ...] = (),
+    ufs: tuple[str, ...] = (),
+    deputado_id: int | None = None,
+    limite: int = 300,
+) -> pd.DataFrame:
+    with _conn() as conn:
+        return queries.get_despesas_detalhado(conn, mes_inicio, mes_fim, partidos, ufs, deputado_id, limite)
+
+
+@st.cache_data(ttl=CACHE_TTL_SEGUNDOS)
 def get_ranking_gasto(
     mes_inicio: str,
     mes_fim: str,

@@ -1,0 +1,16 @@
+# Tema visual do Vigia Publico - paleta categorica validada (skill de
+# dataviz: node scripts/validate_palette.js -> PASS). Ver dashboard/theme.py
+# pras cores usadas dentro dos graficos/UI (esse arquivo so cobre o que o
+# Streamlit tematiza nativamente: fundo, texto, cor primaria dos widgets).
+[theme]
+primaryColor = "#2a78d6"
+backgroundColor = "#f9f9f7"
+secondaryBackgroundColor = "#fcfcfb"
+textColor = "#0b0b0b"
+font = "sans serif"
+
+# "viewer": esconde o botao "Deploy" e as opcoes de desenvolvedor do menu
+# hamburguer - forma oficial/documentada, mais robusta que esconder via CSS
+# (que depende de seletores internos que podem mudar entre versoes).
+[client]
+toolbarMode = "viewer"

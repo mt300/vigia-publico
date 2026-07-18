@@ -13,11 +13,13 @@ from __future__ import annotations
 import datetime as dt
 import json
 from typing import Literal
+from urllib.parse import quote, urlencode
 
 import plotly.express as px
 import streamlit as st
 
-from vigia_publico.dashboard import data
+from vigia_publico.config import PUBLIC_BASE_URL
+from vigia_publico.dashboard import data, export, fonte_page, theme
 from vigia_publico.detection import neutral_copy
 
 Mode = Literal["local", "public"]
@@ -46,25 +48,45 @@ def render(mode: Mode = "local") -> None:
         st.warning("Banco de dados ainda sem despesas. Rode o backfill/update antes de usar o dashboard.")
         st.stop()
 
+    # No modo publico, a URL e a fonte inicial dos filtros (link
+    # compartilhavel) - le uma vez aqui, com fallback pro padrao de sempre
+    # se o parametro nao existir ou nao for mais valido (mes fora do
+    # intervalo disponivel, partido/UF/deputado que sumiu do banco etc).
+    qp = st.query_params if mode == "public" else {}
+
     with st.sidebar:
         st.header("Filtros")
 
         mes_min, mes_max = meses_disponiveis[0], meses_disponiveis[-1]
         idx_padrao_inicio = max(0, len(meses_disponiveis) - 12)  # ultimos 12 meses por padrao
-        mes_inicio = st.selectbox("De (mes)", meses_disponiveis, index=idx_padrao_inicio)
-        mes_fim = st.selectbox("Ate (mes)", meses_disponiveis, index=len(meses_disponiveis) - 1)
+        idx_inicio = meses_disponiveis.index(qp["de"]) if qp.get("de") in meses_disponiveis else idx_padrao_inicio
+        idx_fim = meses_disponiveis.index(qp["ate"]) if qp.get("ate") in meses_disponiveis else len(meses_disponiveis) - 1
+        mes_inicio = st.selectbox("De (mes)", meses_disponiveis, index=idx_inicio)
+        mes_fim = st.selectbox("Ate (mes)", meses_disponiveis, index=idx_fim)
         if mes_inicio > mes_fim:
             st.error("'De' precisa ser antes de 'Ate'.")
             st.stop()
 
-        partidos_sel = tuple(st.multiselect("Partido", data.listar_partidos()))
-        ufs_sel = tuple(st.multiselect("Estado (UF)", data.listar_ufs()))
+        todos_partidos = data.listar_partidos()
+        partidos_padrao = [p for p in qp.get_all("partido") if p in todos_partidos] if mode == "public" else []
+        partidos_sel = tuple(st.multiselect("Partido", todos_partidos, default=partidos_padrao))
+
+        todas_ufs = data.listar_ufs()
+        ufs_padrao = [u for u in qp.get_all("uf") if u in todas_ufs] if mode == "public" else []
+        ufs_sel = tuple(st.multiselect("Estado (UF)", todas_ufs, default=ufs_padrao))
 
         deputados_df = data.listar_deputados(partidos_sel, ufs_sel)
         opcoes_deputado = ["(todos)"] + [
             f"{row.nome_eleitoral} ({row.sigla_partido}/{row.sigla_uf})" for row in deputados_df.itertuples()
         ]
-        deputado_escolhido = st.selectbox("Deputado", opcoes_deputado)
+        idx_deputado_padrao = 0
+        deputado_padrao_id = qp.get("deputado") if mode == "public" else None
+        if deputado_padrao_id:
+            for i, row in enumerate(deputados_df.itertuples()):
+                if str(row.id) == deputado_padrao_id:
+                    idx_deputado_padrao = i + 1  # +1 pois opcoes_deputado[0] e "(todos)"
+                    break
+        deputado_escolhido = st.selectbox("Deputado", opcoes_deputado, index=idx_deputado_padrao)
         deputado_id_sel = None
         if deputado_escolhido != "(todos)":
             idx = opcoes_deputado.index(deputado_escolhido) - 1
@@ -74,6 +96,35 @@ def render(mode: Mode = "local") -> None:
         if mode == "local" and st.button("Recarregar dados"):
             st.cache_data.clear()
             st.rerun()
+
+        if mode == "public":
+            # Mantem a URL sempre sincronizada com o filtro atual - e o que
+            # torna a URL da aba diretamente compartilhavel/copiavel.
+            st.query_params["de"] = mes_inicio
+            st.query_params["ate"] = mes_fim
+            if partidos_sel:
+                st.query_params["partido"] = list(partidos_sel)
+            elif "partido" in st.query_params:
+                del st.query_params["partido"]
+            if ufs_sel:
+                st.query_params["uf"] = list(ufs_sel)
+            elif "uf" in st.query_params:
+                del st.query_params["uf"]
+            if deputado_id_sel:
+                st.query_params["deputado"] = str(deputado_id_sel)
+            elif "deputado" in st.query_params:
+                del st.query_params["deputado"]
+
+            st.divider()
+            st.subheader("🔗 Compartilhar esta visão")
+            querystring = urlencode(dict(st.query_params), doseq=True)
+            url_compartilhavel = f"{PUBLIC_BASE_URL}/painel" + (f"?{querystring}" if querystring else "")
+            st.code(url_compartilhavel, language=None)
+            texto_share = quote("Vigia Público — monitor de deputados federais com dados abertos da Câmara")
+            url_share = quote(url_compartilhavel, safe="")
+            st.link_button("Compartilhar no WhatsApp", f"https://api.whatsapp.com/send?text={texto_share}%20{url_share}", use_container_width=True)
+            st.link_button("Compartilhar no X", f"https://twitter.com/intent/tweet?text={texto_share}&url={url_share}", use_container_width=True)
+            st.link_button("Compartilhar no Telegram", f"https://t.me/share/url?url={url_share}&text={texto_share}", use_container_width=True)
 
     aba_achados, aba_gastos, aba_presenca, aba_perfil = st.tabs(
         ["Achados", "Gastos", "Presenca/Votos", "Perfil do Deputado"]
@@ -112,16 +163,22 @@ def render(mode: Mode = "local") -> None:
                     fig = px.bar(
                         findings["categoria"].value_counts().reset_index(),
                         x="categoria", y="count", title="Achados por categoria",
+                        color="categoria", color_discrete_map=theme.COR_POR_CATEGORIA_LABEL,
                     )
                 else:
                     fig = px.bar(
                         findings["tipo"].value_counts().reset_index(),
                         x="tipo", y="count", title="Achados por tipo",
+                        color="tipo", color_discrete_map=theme.COR_POR_TIPO_ACHADO,
                     )
+                fig.update_layout(showlegend=False)
                 st.plotly_chart(fig, use_container_width=True)
             if mode == "local":
                 with c2:
-                    fig = px.pie(findings, names="severidade", title="Achados por severidade")
+                    fig = px.pie(
+                        findings, names="severidade", title="Achados por severidade",
+                        color="severidade", color_discrete_map=theme.COR_POR_SEVERIDADE,
+                    )
                     st.plotly_chart(fig, use_container_width=True)
 
             ranking = findings.groupby(["nome_eleitoral", "sigla_partido", "sigla_uf"]).size().reset_index(name="alertas")
@@ -130,23 +187,46 @@ def render(mode: Mode = "local") -> None:
             st.dataframe(ranking, use_container_width=True, hide_index=True)
 
             st.subheader("Detalhamento")
+            # "fonte" (tela) e "fonte_url" (export) sao intencionalmente
+            # diferentes no modo publico: a tela usa o link amigavel (evita
+            # o visitante cair no XML cru da API - ver fonte_page.py), o
+            # export CSV/Excel/Markdown mantem a URL crua (mais direta pra
+            # quem vai processar o dado por conta propria).
             if mode == "public":
                 findings["resumo"] = [
                     neutral_copy.render(row.tipo, json.loads(row.dados_suporte) if row.dados_suporte else {})
                     for row in findings.itertuples()
                 ]
+                findings["fonte"] = findings["fonte_url"].apply(lambda u: fonte_page.build_fonte_amigavel_url(u) if u else None)
+                colunas_tela = ["mes_referencia", "nome_eleitoral", "sigla_partido", "sigla_uf", "categoria", "resumo", "fonte"]
+                colunas_export = ["mes_referencia", "nome_eleitoral", "sigla_partido", "sigla_uf", "categoria", "resumo", "fonte_url"]
                 st.dataframe(
-                    findings[["mes_referencia", "nome_eleitoral", "sigla_partido", "sigla_uf", "categoria", "resumo", "fonte_url"]],
-                    use_container_width=True,
-                    hide_index=True,
+                    findings[colunas_tela], use_container_width=True, hide_index=True,
+                    column_config={"fonte": st.column_config.LinkColumn("Fonte", display_text="Ver fonte")},
                 )
                 st.caption("Nao entendeu uma categoria ou termo? Veja a pagina **Como funciona** no menu lateral.")
             else:
+                colunas_export = ["mes_referencia", "nome_eleitoral", "sigla_partido", "sigla_uf", "tipo", "severidade", "descricao", "fonte_url"]
                 st.dataframe(
-                    findings[["mes_referencia", "nome_eleitoral", "sigla_partido", "sigla_uf", "tipo", "severidade", "descricao", "fonte_url"]],
-                    use_container_width=True,
-                    hide_index=True,
+                    findings[colunas_export], use_container_width=True, hide_index=True,
+                    column_config={"fonte_url": st.column_config.LinkColumn("Fonte", display_text="Ver fonte (JSON)")},
                 )
+
+            st.markdown("**Exportar achados filtrados:**")
+            export.botoes_exportar(findings[colunas_export], "vigia_publico_achados", key_prefix="achados")
+            filtros_atuais = {
+                "Periodo": f"{mes_inicio} a {mes_fim}",
+                "Partido": ", ".join(partidos_sel) or None,
+                "Estado (UF)": ", ".join(ufs_sel) or None,
+                "Deputado": deputado_escolhido if deputado_id_sel else None,
+            }
+            st.download_button(
+                "📄 Baixar relatório (Markdown)",
+                export.build_markdown_summary(findings, filtros_atuais),
+                file_name="vigia_publico_relatorio.md",
+                mime="text/markdown",
+                key="achados_markdown",
+            )
         else:
             st.info("Nenhum achado no periodo/filtro selecionado.")
 
@@ -158,25 +238,44 @@ def render(mode: Mode = "local") -> None:
             st.info("Sem dados de despesas no periodo/filtro selecionado.")
         else:
             st.metric("Total gasto no periodo", f"R$ {despesas_mes['total'].sum():,.2f}")
-            fig = px.line(despesas_mes, x="mes", y="total", markers=True, title="Gasto total por mes")
+            fig = px.line(
+                despesas_mes, x="mes", y="total", markers=True, title="Gasto total por mes",
+                color_discrete_sequence=[theme.COR_PRIMARIA],
+            )
             st.plotly_chart(fig, use_container_width=True)
 
             col1, col2 = st.columns(2)
             with col1:
                 categorias = data.get_despesas_por_categoria(mes_inicio, mes_fim, partidos_sel, ufs_sel, deputado_id_sel)
-                fig = px.bar(categorias.head(15), x="total", y="tipo_despesa", orientation="h", title="Gasto por categoria")
+                fig = px.bar(
+                    categorias.head(15), x="total", y="tipo_despesa", orientation="h", title="Gasto por categoria",
+                    color_discrete_sequence=[theme.COR_PRIMARIA],
+                )
                 fig.update_layout(yaxis={"categoryorder": "total ascending"})
                 st.plotly_chart(fig, use_container_width=True)
+                export.botoes_exportar(categorias, "vigia_publico_gastos_por_categoria", key_prefix="gastos_categoria")
             with col2:
                 if deputado_id_sel is None:
                     ranking_gasto = data.get_ranking_gasto(mes_inicio, mes_fim, partidos_sel, ufs_sel)
                     st.subheader("Top 20 deputados por gasto total")
-                    st.dataframe(
-                        ranking_gasto[["nome_eleitoral", "sigla_partido", "sigla_uf", "total"]],
-                        use_container_width=True, hide_index=True,
-                    )
+                    ranking_gasto_cols = ranking_gasto[["nome_eleitoral", "sigla_partido", "sigla_uf", "total"]]
+                    st.dataframe(ranking_gasto_cols, use_container_width=True, hide_index=True)
+                    export.botoes_exportar(ranking_gasto_cols, "vigia_publico_ranking_gasto", key_prefix="ranking_gasto")
                 else:
                     st.dataframe(categorias, use_container_width=True, hide_index=True)
+
+            with st.expander("🔍 Ver despesas individuais (fornecedor, data, valor, nota)"):
+                detalhado = data.get_despesas_detalhado(mes_inicio, mes_fim, partidos_sel, ufs_sel, deputado_id_sel)
+                if detalhado.empty:
+                    st.info("Sem despesas individuais no periodo/filtro selecionado.")
+                else:
+                    if len(detalhado) >= 300:
+                        st.caption("Mostrando as 300 maiores despesas do filtro atual - refine o filtro (ex: escolha um deputado) pra ver tudo.")
+                    st.dataframe(
+                        detalhado, use_container_width=True, hide_index=True,
+                        column_config={"url_documento": st.column_config.LinkColumn("Nota", display_text="Ver nota")},
+                    )
+                    export.botoes_exportar(detalhado, "vigia_publico_despesas_detalhado", key_prefix="despesas_detalhado")
 
     # --- aba: presenca/votos ------------------------------------------------------
 
@@ -188,10 +287,16 @@ def render(mode: Mode = "local") -> None:
         else:
             media = presenca["taxa_presenca"].mean()
             st.metric("Taxa media de presenca no periodo", f"{media:.0%}")
-            fig = px.line(presenca, x="mes", y="taxa_presenca", markers=True, title="Taxa de presenca por mes")
+            fig = px.line(
+                presenca, x="mes", y="taxa_presenca", markers=True, title="Taxa de presenca por mes",
+                color_discrete_sequence=[theme.COR_PRIMARIA],
+            )
+            # Amber (cor de "atencao ao contexto"), nao vermelho/crimson - o
+            # destaque e so um lembrete temporal (proximidade de eleicao),
+            # nao um alarme, e vermelho contradiria o texto logo abaixo.
             fig.add_bar(
                 x=presenca["mes"], y=presenca["taxa_presenca"],
-                marker_color=["crimson" if p else "rgba(0,0,0,0)" for p in presenca["proximo_eleicao"]],
+                marker_color=[theme.COR_DESTAQUE_ELEICAO if p else "rgba(0,0,0,0)" for p in presenca["proximo_eleicao"]],
                 showlegend=False, opacity=0.25, name="Proximo de eleicao",
             )
             fig.update_yaxes(tickformat=".0%", range=[0, 1])
@@ -200,8 +305,8 @@ def render(mode: Mode = "local") -> None:
                 "Presenca bruta = votos registrados / votacoes NOMINAIS do Plenario no mes "
                 "(votacoes simbolicas/por unanimidade nao entram na conta). Este grafico NAO "
                 "desconta periodos de licenca oficial - para a taxa de ausencia SEM JUSTIFICATIVA "
-                "(que ja exclui licenca e e a base dos alertas), veja a aba Achados. Barras "
-                "vermelhas destacam ago/set/out de anos de eleicao geral (quando deputados "
+                "(que ja exclui licenca e e a base dos alertas), veja a aba Achados. Faixas em "
+                "destaque marcam ago/set/out de anos de eleicao geral (quando deputados "
                 "federais concorrem a reeleicao) - e comum a presenca cair nesses meses por causa "
                 "de campanha, isso NAO e por si so um sinal de irregularidade."
             )
@@ -210,6 +315,8 @@ def render(mode: Mode = "local") -> None:
                 col1, col2 = st.columns(2)
                 col1.metric("Presenca media - proximo de eleicao", f"{presenca.loc[presenca['proximo_eleicao'], 'taxa_presenca'].mean():.0%}")
                 col2.metric("Presenca media - resto do mandato", f"{presenca.loc[~presenca['proximo_eleicao'], 'taxa_presenca'].mean():.0%}")
+
+            export.botoes_exportar(presenca, "vigia_publico_presenca", key_prefix="presenca")
 
     # --- aba: perfil do deputado ---------------------------------------------------
 
@@ -238,11 +345,24 @@ def render(mode: Mode = "local") -> None:
             st.subheader("Historico de mandatos e trocas de partido")
             historico = data.get_historico_deputado(deputado_id_sel)
             st.dataframe(historico, use_container_width=True, hide_index=True)
+            export.botoes_exportar(historico, f"vigia_publico_historico_{deputado_id_sel}", key_prefix="perfil_historico")
 
             st.subheader("Gasto mensal")
             despesas_dep = data.get_despesas_mensal(mes_inicio, mes_fim, deputado_id=deputado_id_sel)
             if not despesas_dep.empty:
-                st.plotly_chart(px.bar(despesas_dep, x="mes", y="total"), use_container_width=True)
+                fig = px.bar(despesas_dep, x="mes", y="total", color_discrete_sequence=[theme.COR_PRIMARIA])
+                st.plotly_chart(fig, use_container_width=True)
+
+            with st.expander("🔍 Ver despesas individuais (fornecedor, data, valor, nota)"):
+                detalhado_dep = data.get_despesas_detalhado(mes_inicio, mes_fim, deputado_id=deputado_id_sel, limite=1000)
+                if detalhado_dep.empty:
+                    st.info("Sem despesas individuais no periodo selecionado.")
+                else:
+                    st.dataframe(
+                        detalhado_dep, use_container_width=True, hide_index=True,
+                        column_config={"url_documento": st.column_config.LinkColumn("Nota", display_text="Ver nota")},
+                    )
+                    export.botoes_exportar(detalhado_dep, f"vigia_publico_despesas_{deputado_id_sel}", key_prefix="perfil_despesas_detalhado")
 
             st.subheader("Achados deste deputado no periodo")
             findings_dep = data.get_findings(mes_inicio, mes_fim, deputado_id=deputado_id_sel)
@@ -255,9 +375,20 @@ def render(mode: Mode = "local") -> None:
                     neutral_copy.render(row.tipo, json.loads(row.dados_suporte) if row.dados_suporte else {})
                     for row in findings_dep.itertuples()
                 ]
-                st.dataframe(findings_dep[["mes_referencia", "categoria", "resumo"]], use_container_width=True, hide_index=True)
+                findings_dep["fonte"] = findings_dep["fonte_url"].apply(lambda u: fonte_page.build_fonte_amigavel_url(u) if u else None)
+                st.dataframe(
+                    findings_dep[["mes_referencia", "categoria", "resumo", "fonte"]], use_container_width=True, hide_index=True,
+                    column_config={"fonte": st.column_config.LinkColumn("Fonte", display_text="Ver fonte")},
+                )
+                findings_dep_cols = findings_dep[["mes_referencia", "categoria", "resumo", "fonte_url"]]
+                export.botoes_exportar(findings_dep_cols, f"vigia_publico_achados_{deputado_id_sel}", key_prefix="perfil_achados")
             else:
-                st.dataframe(findings_dep[["mes_referencia", "tipo", "severidade", "descricao"]], use_container_width=True, hide_index=True)
+                findings_dep_cols = findings_dep[["mes_referencia", "tipo", "severidade", "descricao", "fonte_url"]]
+                st.dataframe(
+                    findings_dep_cols, use_container_width=True, hide_index=True,
+                    column_config={"fonte_url": st.column_config.LinkColumn("Fonte", display_text="Ver fonte (JSON)")},
+                )
+                export.botoes_exportar(findings_dep_cols, f"vigia_publico_achados_{deputado_id_sel}", key_prefix="perfil_achados")
 
     st.caption(f"Dados atualizados ate {mes_max}. Gerado em {dt.datetime.now().strftime('%Y-%m-%d %H:%M')}.")
     st.caption("Desenvolvido por [MWebS](https://www.mwebs.com.br).")

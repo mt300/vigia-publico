@@ -28,17 +28,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import streamlit as st  # noqa: E402
 
-from vigia_publico.dashboard import data, public_pages, views  # noqa: E402
+from vigia_publico.dashboard import data, fonte_page, public_pages, theme, views  # noqa: E402
 from vigia_publico.reporting.public_snapshot import ensure_decompressed  # noqa: E402
 
 st.set_page_config(page_title="Vigia Público", page_icon="\U0001f3db️", layout="wide")
+theme.injetar_css()
 data.use_db_path(ensure_decompressed())
 
 pagina = st.navigation(
     [
-        st.Page(public_pages.render_home, title="Início", icon="🏛️", default=True),
-        st.Page(lambda: views.render(mode="public"), title="Painel", icon="📊"),
-        st.Page(public_pages.render_tutorial, title="Como funciona", icon="📖"),
+        st.Page(public_pages.render_home, title="Início", icon="🏛️", url_path="", default=True),
+        # url_path explicito (nao o slug auto-derivado do title) - o link
+        # compartilhavel (views.py) e os links "Ver fonte" (fonte_page.py)
+        # montam a URL contra esses caminhos fixos.
+        st.Page(lambda: views.render(mode="public"), title="Painel", icon="📊", url_path="painel"),
+        st.Page(public_pages.render_tutorial, title="Como funciona", icon="📖", url_path="como-funciona"),
+        st.Page(fonte_page.render_fonte, title="Fonte de um achado", icon="🔎", url_path="fonte"),
     ]
 )
 pagina.run()

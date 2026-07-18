@@ -20,6 +20,11 @@ DB_PATH = DATA_DIR / "vigia_publico.db"
 CAMARA_API_BASE_URL = "https://dadosabertos.camara.leg.br/api/v2"
 CAMARA_API_REQUESTS_PER_SECOND = 4
 
+# Dominio publico do dashboard - usado so pra montar o link compartilhavel
+# (dashboard/views.py). Sobrescrevivel via env var pra testar em outro
+# dominio/porta sem editar codigo.
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://vigiapublico.mwebs.com.br")
+
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 LLM_MONTHLY_BUDGET_USD = float(os.environ.get("LLM_MONTHLY_BUDGET_USD", "10"))
 
