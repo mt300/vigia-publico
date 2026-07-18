@@ -27,6 +27,12 @@ import streamlit as st
 
 HOST_PERMITIDO = "dadosabertos.camara.leg.br"
 
+# Despesas/votos de um mes ja fechado nao mudam mais - cachear por 1h evita
+# bater na API da Camara de novo a cada visita/refresh do mesmo link "Ver
+# fonte" (inclusive links compartilhados/virais batendo na mesma URL varias
+# vezes seguidas).
+CACHE_TTL_SEGUNDOS = 3600
+
 
 def build_fonte_amigavel_url(raw_url: str) -> str:
     """Envolve uma URL da API da Camara num link RELATIVO pra essa pagina -
@@ -48,6 +54,7 @@ def _url_permitida(url: str) -> bool:
     return p.scheme == "https" and p.hostname == HOST_PERMITIDO
 
 
+@st.cache_data(ttl=CACHE_TTL_SEGUNDOS)
 def _buscar_json(url: str) -> dict | list:
     req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "vigia-publico"})
     with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310 - host ja validado em _url_permitida
