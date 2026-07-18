@@ -24,14 +24,19 @@ Mode = Literal["local", "public"]
 
 
 def render(mode: Mode = "local") -> None:
-    st.set_page_config(page_title="Vigia Público", page_icon="\U0001f3db️", layout="wide")
+    """Renderiza o painel (abas Achados/Gastos/Presenca/Perfil).
 
+    Nao chama `st.set_page_config` - isso e responsabilidade de quem entra
+    primeiro no script (`app.py` pro local, `app_public.py` pro publico, que
+    tem varias paginas e so pode chamar set_page_config uma vez no total).
+    """
     st.title("Vigia Público - Monitor de Deputados Federais")
     if mode == "public":
         st.caption(
             "Dados publicos da API de Dados Abertos da Camara dos Deputados. Os indicadores abaixo sao "
             "comparacoes estatisticas simples (gasto/presenca vs. media propria ou de pares) - nao "
-            "constituem acusacao nem conclusao sobre irregularidade."
+            "constituem acusacao nem conclusao sobre irregularidade. Termos como 'desvio-padrao' "
+            "explicados na pagina **Como funciona** (menu lateral)."
         )
 
     # --- filtros globais (sidebar) -------------------------------------------
@@ -78,7 +83,16 @@ def render(mode: Mode = "local") -> None:
 
     with aba_achados:
         col1, col2 = st.columns(2)
-        tipos_sel = tuple(col1.multiselect("Tipo de achado", data.listar_tipos_finding()))
+        tipos_disponiveis = data.listar_tipos_finding()
+        if mode == "public":
+            # Mostra rotulo amigavel no filtro (nao o codigo cru tipo
+            # "GASTO_OUTLIER_VS_PARES"), mas resolve de volta pro codigo
+            # antes de consultar - ver detection/neutral_copy.py.
+            opcoes_tipo = {neutral_copy.TIPO_LABEL_PUBLICO.get(t, t): t for t in tipos_disponiveis}
+            labels_sel = col1.multiselect("Categoria de achado", sorted(opcoes_tipo.keys()))
+            tipos_sel = tuple(opcoes_tipo[label] for label in labels_sel)
+        else:
+            tipos_sel = tuple(col1.multiselect("Tipo de achado", tipos_disponiveis))
         severidades_sel = ()
         if mode == "local":
             severidades_sel = tuple(col2.multiselect("Severidade", ["baixa", "media", "alta"]))
@@ -88,12 +102,22 @@ def render(mode: Mode = "local") -> None:
         st.metric("Total de achados no periodo/filtro", len(findings))
 
         if not findings.empty:
+            findings = findings.copy()
+            if mode == "public":
+                findings["categoria"] = findings["tipo"].map(lambda t: neutral_copy.TIPO_LABEL_PUBLICO.get(t, t))
+
             c1, c2 = st.columns(2)
             with c1:
-                fig = px.bar(
-                    findings["tipo"].value_counts().reset_index(),
-                    x="tipo", y="count", title="Achados por tipo",
-                )
+                if mode == "public":
+                    fig = px.bar(
+                        findings["categoria"].value_counts().reset_index(),
+                        x="categoria", y="count", title="Achados por categoria",
+                    )
+                else:
+                    fig = px.bar(
+                        findings["tipo"].value_counts().reset_index(),
+                        x="tipo", y="count", title="Achados por tipo",
+                    )
                 st.plotly_chart(fig, use_container_width=True)
             if mode == "local":
                 with c2:
@@ -107,16 +131,16 @@ def render(mode: Mode = "local") -> None:
 
             st.subheader("Detalhamento")
             if mode == "public":
-                findings = findings.copy()
                 findings["resumo"] = [
                     neutral_copy.render(row.tipo, json.loads(row.dados_suporte) if row.dados_suporte else {})
                     for row in findings.itertuples()
                 ]
                 st.dataframe(
-                    findings[["mes_referencia", "nome_eleitoral", "sigla_partido", "sigla_uf", "tipo", "resumo", "fonte_url"]],
+                    findings[["mes_referencia", "nome_eleitoral", "sigla_partido", "sigla_uf", "categoria", "resumo", "fonte_url"]],
                     use_container_width=True,
                     hide_index=True,
                 )
+                st.caption("Nao entendeu uma categoria ou termo? Veja a pagina **Como funciona** no menu lateral.")
             else:
                 st.dataframe(
                     findings[["mes_referencia", "nome_eleitoral", "sigla_partido", "sigla_uf", "tipo", "severidade", "descricao", "fonte_url"]],
@@ -226,11 +250,12 @@ def render(mode: Mode = "local") -> None:
                 st.dataframe(findings_dep, use_container_width=True, hide_index=True)
             elif mode == "public":
                 findings_dep = findings_dep.copy()
+                findings_dep["categoria"] = findings_dep["tipo"].map(lambda t: neutral_copy.TIPO_LABEL_PUBLICO.get(t, t))
                 findings_dep["resumo"] = [
                     neutral_copy.render(row.tipo, json.loads(row.dados_suporte) if row.dados_suporte else {})
                     for row in findings_dep.itertuples()
                 ]
-                st.dataframe(findings_dep[["mes_referencia", "tipo", "resumo"]], use_container_width=True, hide_index=True)
+                st.dataframe(findings_dep[["mes_referencia", "categoria", "resumo"]], use_container_width=True, hide_index=True)
             else:
                 st.dataframe(findings_dep[["mes_referencia", "tipo", "severidade", "descricao"]], use_container_width=True, hide_index=True)
 

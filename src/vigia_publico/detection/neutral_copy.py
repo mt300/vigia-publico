@@ -90,6 +90,74 @@ _RENDERERS = {
     "TAXA_AUSENCIA_ALTA": _taxa_ausencia_alta,
 }
 
+# Rotulo curto (pra tabela/filtro) e explicacao em linguagem simples (pra
+# pagina de tutorial e pra um texto de apoio no proprio dashboard) de cada
+# tipo - o codigo cru (ex: "GASTO_OUTLIER_VS_PARES") e um identificador
+# interno, nao foi pensado pra leitura publica.
+TIPO_LABEL_PUBLICO: dict[str, str] = {
+    "GASTO_OUTLIER": "Gasto acima do proprio historico",
+    "GASTO_OUTLIER_VS_PARES": "Gasto acima da media dos colegas",
+    "VALOR_REPETIDO_SUSPEITO": "Mesmo valor cobrado varias vezes",
+    "FORNECEDOR_POUCO_COMUM": "Fornecedor pouco usado, gasto alto",
+    "FORNECEDOR_CONCENTRADO": "Gasto concentrado num fornecedor",
+    "TAXA_AUSENCIA_ALTA": "Ausencia alta em votacoes",
+}
+
+TIPO_EXPLICACAO_PUBLICO: dict[str, str] = {
+    "GASTO_OUTLIER": (
+        "O deputado gastou, numa categoria (ex: combustivel, passagem aerea), bem mais do que "
+        "costuma gastar nessa mesma categoria historicamente. E uma comparacao do deputado com "
+        "ELE MESMO ao longo do tempo, nao com outros deputados."
+    ),
+    "GASTO_OUTLIER_VS_PARES": (
+        "O deputado gastou, numa categoria, bem mais do que a media de outros deputados do "
+        "mesmo partido ou do mesmo estado gastaram na mesma categoria e no mesmo mes. E uma "
+        "comparacao entre colegas, nao com o historico proprio."
+    ),
+    "VALOR_REPETIDO_SUSPEITO": (
+        "O mesmo valor exato foi cobrado varias vezes no mesmo dia, pelo mesmo fornecedor. "
+        "Pode ser uma forma de dividir uma compra maior em varias notas menores, mas tambem "
+        "pode ter explicacao legitima (ex: varias diarias de hotel emitidas juntas)."
+    ),
+    "FORNECEDOR_POUCO_COMUM": (
+        "O deputado gastou um valor alto com um fornecedor que quase nenhum outro deputado "
+        "usa (as vezes so ele). Isso pode ser normal (fornecedor local da regiao dele), mas "
+        "chama atencao pela combinacao de raridade + valor alto."
+    ),
+    "FORNECEDOR_CONCENTRADO": (
+        "Uma fatia grande de tudo que o deputado gastou no mes foi com um unico fornecedor, "
+        "em vez de distribuido entre varios - o que reduz a diversidade normalmente esperada "
+        "de gastos de gabinete."
+    ),
+    "TAXA_AUSENCIA_ALTA": (
+        "O deputado nao registrou voto numa fracao alta das votacoes do Plenario no mes, sem "
+        "estar de licenca oficial registrada. O motivo especifico da ausencia nao aparece na "
+        "API publica - pode ser falta mesmo, ou um problema de registro."
+    ),
+}
+
+# Termos estatisticos que aparecem no texto dos achados, explicados em
+# linguagem simples - usado na pagina de tutorial.
+GLOSSARIO_ESTATISTICO: dict[str, str] = {
+    "Desvio-padrao / z-score": (
+        "Uma forma de medir 'o quanto um numero foge do normal'. Se o gasto de um mes esta "
+        "'2 desvios-padrao acima da media', significa que ele esta bem mais alto do que o "
+        "usual - quanto maior esse numero, mais fora do padrao habitual o valor esta. Nao "
+        "significa, por si so, que algo esta errado - so que e incomum e vale um olhar mais "
+        "de perto."
+    ),
+    "Media historica": (
+        "A media dos valores do PROPRIO deputado nos meses/anos anteriores, na mesma "
+        "categoria de despesa - a base de comparacao usada pra saber se o mes atual foge do "
+        "que e normal PRA ELE."
+    ),
+    "Votacao nominal": (
+        "Uma votacao no Plenario em que cada deputado tem o voto individual registrado "
+        "(diferente de votacoes simbolicas, onde nao ha registro individual). So votacoes "
+        "nominais entram na conta de presenca/ausencia."
+    ),
+}
+
 
 def render(tipo: str, dados_suporte: dict) -> str:
     """Frase neutra para o achado, a partir so de `dados_suporte`.
