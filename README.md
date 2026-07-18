@@ -1,4 +1,6 @@
-# senado-sentinel
+# Vigia Público
+
+*Desenvolvido por [MWebS](https://www.mwebs.com.br).*
 
 Monitor mensal de gastos, presenca e discursos dos deputados federais brasileiros,
 usando a API publica de Dados Abertos da Camara dos Deputados
@@ -6,7 +8,11 @@ usando a API publica de Dados Abertos da Camara dos Deputados
 incoerencia entre discurso e voto, discursos com possivel conteudo contra o
 interesse publico) e gera um relatorio Markdown por mes.
 
-> Apesar do nome do diretorio, o escopo e a Camara dos Deputados (nao o Senado).
+> Escopo atual: Camara dos Deputados (nao o Senado) - o nome "Vigia Público"
+> foi escolhido de propósito pra nao ficar preso a uma casa legislativa so,
+> caso o Senado (ou outras esferas) entre no escopo no futuro. O diretorio no
+> disco ainda se chama `senado-sentinel` por legado (nome interno anterior);
+> o pacote Python e o nome do projeto ja sao `vigia_publico`/`vigia-publico`.
 
 ## Setup
 
@@ -18,10 +24,10 @@ copy .env.example .env      REM preencha ANTHROPIC_API_KEY para a analise de dis
 ## Uso
 
 ```
-uv run python -m senado_sentinel.cli backfill              # ingestao inicial (demorado, rode uma vez)
-uv run python -m senado_sentinel.cli backfill --limite 5    # so 5 deputados, para testar
-uv run python -m senado_sentinel.cli run-all                # update + detect + report do mes anterior
-uv run python -m senado_sentinel.cli report --mes-referencia 2024-03
+uv run python -m vigia_publico.cli backfill              # ingestao inicial (demorado, rode uma vez)
+uv run python -m vigia_publico.cli backfill --limite 5    # so 5 deputados, para testar
+uv run python -m vigia_publico.cli run-all                # update + detect + report do mes anterior
+uv run python -m vigia_publico.cli report --mes-referencia 2024-03
 ```
 
 Sem `ANTHROPIC_API_KEY` configurada, o pipeline roda normalmente mas pula a
@@ -31,7 +37,7 @@ de partido rodam).
 ## Dashboard
 
 ```
-uv run streamlit run src/senado_sentinel/dashboard/app.py
+uv run streamlit run src/vigia_publico/dashboard/app.py
 ```
 
 Abre um dashboard local no navegador (`scripts\run_dashboard.bat` faz o mesmo).
@@ -41,7 +47,7 @@ achados, gastos, presenca/votos e perfil do deputado.
 ## Agendamento mensal (Windows Task Scheduler)
 
 ```
-schtasks /Create /SC MONTHLY /D 5 /TN "SenadoSentinel_Mensal" /TR "\"D:\projects\MWEBS-AUTOMATION\claude-project\senado-sentinel\scripts\run_monthly.bat\"" /ST 03:00
+schtasks /Create /SC MONTHLY /D 5 /TN "VigiaPublico_Mensal" /TR "\"D:\projects\MWEBS-AUTOMATION\claude-project\senado-sentinel\scripts\run_monthly.bat\"" /ST 03:00
 ```
 
 Isso roda `scripts\run_monthly.bat` todo dia 5 do mes as 03:00, processando o
@@ -81,3 +87,7 @@ fora do escopo atual (so API da Camara):
   legislativa alem de discurso/voto, e permitiria cruzar tema das
   proposicoes com tema dos discursos e com fornecedores de despesa do mesmo
   setor.
+
+---
+
+Desenvolvido por [MWebS](https://www.mwebs.com.br).

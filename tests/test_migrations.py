@@ -20,7 +20,7 @@ def test_migrations_aplicam_em_banco_vazio(conn):
 
 
 def test_migrations_sao_idempotentes(conn):
-    from senado_sentinel.db.connection import run_migrations
+    from vigia_publico.db.connection import run_migrations
 
     aplicadas_de_novo = run_migrations(conn)
     assert aplicadas_de_novo == []

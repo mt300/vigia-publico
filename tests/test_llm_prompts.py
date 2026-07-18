@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from senado_sentinel.detection import llm_analysis as llm
+from vigia_publico.detection import llm_analysis as llm
 
 
 class _FakeMessages:

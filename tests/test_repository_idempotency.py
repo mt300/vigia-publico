@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from senado_sentinel.db import repository as repo
+from vigia_publico.db import repository as repo
 
 FIXTURES = Path(__file__).parent / "fixtures" / "sample_api_responses"
 

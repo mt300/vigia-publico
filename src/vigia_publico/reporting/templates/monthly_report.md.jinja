@@ -1,0 +1,64 @@
+# Relatorio de Monitoramento - {{ mes_referencia }}
+
+Gerado em {{ gerado_em }}. Total de achados no mes: **{{ total_findings }}**.
+
+## Resumo executivo
+
+| Tipo de achado | Quantidade |
+|---|---|
+{%- for tipo, qtd in contagem_por_tipo.items() %}
+| {{ tipo }} | {{ qtd }} |
+{%- endfor %}
+
+## Ranking de deputados por numero de alertas no mes
+
+| # | Deputado | Partido/UF | Alertas |
+|---|---|---|---|
+{%- for item in ranking %}
+| {{ loop.index }} | {{ item.nome_eleitoral }} | {{ item.sigla_partido }}/{{ item.sigla_uf }} | {{ item.total }} |
+{%- endfor %}
+
+{% if not ranking %}
+Nenhum achado no mes de referencia.
+{% endif %}
+
+---
+
+{% for deputado in deputados_com_achados %}
+## {{ deputado.nome_eleitoral }} ({{ deputado.sigla_partido }}/{{ deputado.sigla_uf }})
+
+{% for finding in deputado.findings %}
+### {{ finding.tipo }} - severidade: {{ finding.severidade }}
+
+{{ finding.descricao }}
+
+{%- if finding.fonte_url %}
+
+Fonte: {{ finding.fonte_url }}
+{%- endif %}
+
+{% endfor %}
+---
+{% endfor %}
+
+## Metodologia e disclaimer
+
+- **Gastos**: outliers calculados por z-score comparando o gasto do mes por categoria com a
+  media historica do proprio deputado (ultimos 24 meses). Fornecedores concentrados sinalizam
+  quando uma fracao grande do gasto do mes vai para um unico fornecedor.
+- **Presenca**: taxa de ausencia SEM JUSTIFICATIVA, calculada por exclusao (deputado nao
+  aparece entre os votos registrados de uma votacao nominal do Plenario) e cruzada com o
+  status oficial do deputado naquela data. Falta durante um periodo de "Licenca" registrado
+  (afastamento medico, maternidade, missao etc) NAO conta para o alerta - fica registrada a
+  parte, em `faltas_licenca`, para transparencia. "Obstrucao" (tatica de plenario) ja aparece
+  como voto registrado e nao conta como ausencia. Ainda assim, a API da Camara nao expoe um
+  motivo formal por votacao individual - o numero e uma aproximacao e pode exigir verificacao
+  manual em casos-limite.
+- **Discursos**: incoerencia e conteudo suspeito sao sinalizados por um modelo de linguagem
+  (Claude/Anthropic) com base em criterios objetivos e citacao literal do texto como evidencia.
+  **Estes sao sinais heuristicos para revisao humana, nao vereditos ou acusacoes.**
+- Troca de partido e informativa (severidade baixa), nao indica necessariamente irregularidade.
+
+---
+
+Vigia Público - desenvolvido por [MWebS](https://www.mwebs.com.br).

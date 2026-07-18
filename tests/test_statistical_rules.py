@@ -1,4 +1,4 @@
-from senado_sentinel.detection.statistical import (
+from vigia_publico.detection.statistical import (
     detectar_baixa_atividade_geral,
     detectar_concentracao_fornecedor,
     detectar_faltas,

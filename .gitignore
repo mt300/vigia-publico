@@ -19,6 +19,11 @@ logs/*.log
 logs/*.log.*
 reports/*.html
 
+# Snapshot publico descompactado + sidecars de WAL (artefatos de teste local)
+# - so o .db.gz (ver reporting/public_snapshot.py) e git-tracked/publicado.
+public_data/*.db
+public_data/*.db-*
+
 .pytest_cache/
 
 # Artefatos do harness do Claude Code (nao faz parte do projeto)

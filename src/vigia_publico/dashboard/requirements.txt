@@ -1,0 +1,20 @@
+# Dependencias do deploy PUBLICO (Streamlit Community Cloud), separado do
+# pyproject.toml/uv.lock do projeto completo. Deliberadamente NAO inclui
+# anthropic/httpx/tenacity: o dashboard publico nunca deve conseguir importar
+# codigo de ingestao/analise LLM, mesmo por acidente - ver app_public.py.
+#
+# Streamlit Community Cloud instala via pip a partir deste arquivo (nao le
+# uv.lock/pyproject.toml no formato uv). "Main file path" do app aponta pra
+# src/vigia_publico/dashboard/app_public.py.
+#
+# `-e .` instala o proprio pacote vigia_publico (build-backend uv_build no
+# pyproject.toml da raiz) em modo editavel, pra "from vigia_publico...."
+# funcionar dentro do app - Streamlit Cloud roda `pip install -r` com cwd na
+# raiz do repo, entao o caminho relativo resolve certo. NAO TESTADO ainda
+# num deploy real: e o ponto de maior incerteza tecnica do plano (uv_build
+# via pip puro) - validar com um deploy de teste antes de depender disso.
+-e .
+streamlit>=1.59.2
+pandas>=3.0.3
+plotly>=6.9.0
+python-dotenv>=1.2.2

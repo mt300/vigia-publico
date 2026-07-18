@@ -2,7 +2,7 @@ import sqlite3
 
 import pytest
 
-from senado_sentinel.db.connection import run_migrations
+from vigia_publico.db.connection import run_migrations
 
 
 @pytest.fixture

@@ -1,5 +1,5 @@
 [project]
-name = "senado-sentinel"
+name = "vigia-publico"
 version = "0.1.0"
 description = "Monitor mensal de gastos, presença e discursos dos deputados federais brasileiros"
 readme = "README.md"
@@ -19,8 +19,11 @@ dependencies = [
     "tenacity>=9.1.4",
 ]
 
+[project.urls]
+Homepage = "https://www.mwebs.com.br"
+
 [project.scripts]
-senado-sentinel = "senado_sentinel.cli:main"
+vigia-publico = "vigia_publico.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.11.28,<0.12.0"]
