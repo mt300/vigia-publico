@@ -1,0 +1,10 @@
+# HTTPS automatico (Let's Encrypt) pro dashboard publico. Precisa do DNS de
+# vigiapublico.mwebs.com.br apontando (registro A) pro IP da VPS antes de
+# subir - senao a emissao do certificado falha.
+#
+# Quando comprar o dominio vigia-publico proprio, so adicionar ele na mesma
+# linha (Caddy aceita varios hosts por bloco, ambos ganham certificado):
+#   vigiapublico.mwebs.com.br, vigiapublico.com.br {
+vigiapublico.mwebs.com.br {
+    reverse_proxy app:8501
+}

@@ -1,0 +1,17 @@
+# So pyproject.toml/README.md/src/public_data entram na imagem (ver
+# Dockerfile, que faz COPY explicito dessas pastas) - isso aqui e uma camada
+# extra de seguranca pra garantir que o banco PRIVADO (data/, com CPF etc),
+# .env, e o resto nunca entrem no contexto de build por acidente.
+.venv/
+.git/
+data/
+logs/
+reports/
+tests/
+scripts/
+.pytest_cache/
+.claude/
+__pycache__/
+*.pyc
+.env
+uv.lock

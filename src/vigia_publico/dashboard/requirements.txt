@@ -7,13 +7,12 @@
 # uv.lock/pyproject.toml no formato uv). "Main file path" do app aponta pra
 # src/vigia_publico/dashboard/app_public.py.
 #
-# `-e .` instala o proprio pacote vigia_publico (build-backend uv_build no
-# pyproject.toml da raiz) em modo editavel, pra "from vigia_publico...."
-# funcionar dentro do app - Streamlit Cloud roda `pip install -r` com cwd na
-# raiz do repo, entao o caminho relativo resolve certo. NAO TESTADO ainda
-# num deploy real: e o ponto de maior incerteza tecnica do plano (uv_build
-# via pip puro) - validar com um deploy de teste antes de depender disso.
--e .
+# NAO tem `-e .` aqui de proposito: instalar o pacote (mesmo so o proprio,
+# via pip) resolveria `[project.dependencies]` inteiro do pyproject.toml da
+# raiz - anthropic/httpx inclusive - o que anularia o motivo desta lista
+# curada existir. app_public.py so adiciona `src/` ao sys.path (ver o inicio
+# do arquivo), entao "from vigia_publico...." funciona sem pip-instalar nada
+# do pacote local. Validado com um build Docker real (Dockerfile na raiz).
 streamlit>=1.59.2
 pandas>=3.0.3
 plotly>=6.9.0
