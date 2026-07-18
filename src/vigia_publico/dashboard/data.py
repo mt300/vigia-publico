@@ -8,10 +8,11 @@ gravavel vs snapshot publico read-only) sem tocar em secrets/env.
 
 from __future__ import annotations
 
+import functools
 import sqlite3
 from pathlib import Path
+from typing import Callable
 
-import pandas as pd
 import streamlit as st
 
 from vigia_publico.analytics import queries
@@ -27,128 +28,60 @@ def use_db_path(path: Path) -> None:
     _db_path = path
 
 
-def _conn() -> sqlite3.Connection:
-    return sqlite3.connect(f"file:{_db_path}?mode=ro", uri=True)
+def _cached_query(query_fn: Callable) -> Callable:
+    """Decorator pra funcoes de `analytics/queries.py` (recebem `conn` como
+    1o argumento). Abre a conexao com o banco ATUAL (`_db_path`) e - o
+    ponto principal - inclui o CAMINHO do banco na chave de cache do
+    Streamlit.
+
+    Sem isso, `st.cache_data` cacheia so pelos argumentos visiveis da
+    funcao (nunca ve `_db_path`, que e uma variavel de modulo por fora da
+    assinatura) - trocar de banco no mesmo processo via `use_db_path()`
+    devolve resultado cacheado do banco ANTERIOR pra qualquer chamada com
+    os mesmos argumentos. Bug real, reproduzido: banco A com um partido,
+    troca pra banco B com outro partido, `listar_partidos()` continua
+    devolvendo o do banco A. So morde quando dois bancos coexistem no
+    mesmo processo (nao acontece em producao - cada processo, local ou
+    publico, so chama `use_db_path()` uma vez - mas acontece em testes que
+    usam bancos temporarios diferentes por teste). Ver
+    `tests/test_data_cache_isolamento.py`.
+
+    Tambem inclui o NOME da query na chave - a funcao interna `_cached` e
+    redefinida a cada chamada de `_cached_query` (uma vez por funcao
+    decorada aqui embaixo), mas todas nascem no mesmo `__qualname__`
+    (`_cached_query.<locals>._cached`, mesma linha de origem) porque sao
+    definidas dentro do MESMO decorator. O Streamlit usa esse identificador
+    estatico (nao a identidade do objeto em memoria) como parte da chave de
+    cache - sem o nome da query, duas funcoes DIFERENTES com a MESMA forma
+    de argumentos (ex: `get_despesas_mensal` e `get_despesas_por_categoria`,
+    ambas `(mes_inicio, mes_fim, partidos, ufs, deputado_id)`) chamadas com
+    os MESMOS valores colidem e uma devolve o resultado cacheado da outra.
+    Bug reproduzido e coberto em `tests/test_data_cache_isolamento.py`.
+    """
+
+    @st.cache_data(ttl=CACHE_TTL_SEGUNDOS)
+    def _cached(query_name: str, db_path_str: str, *args, **kwargs):
+        with sqlite3.connect(f"file:{db_path_str}?mode=ro", uri=True) as conn:
+            return query_fn(conn, *args, **kwargs)
+
+    @functools.wraps(query_fn)
+    def wrapper(*args, **kwargs):
+        return _cached(query_fn.__qualname__, str(_db_path), *args, **kwargs)
+
+    return wrapper
 
 
-@st.cache_data(ttl=CACHE_TTL_SEGUNDOS)
-def listar_partidos() -> list[str]:
-    with _conn() as conn:
-        return queries.listar_partidos(conn)
-
-
-@st.cache_data(ttl=CACHE_TTL_SEGUNDOS)
-def listar_ufs() -> list[str]:
-    with _conn() as conn:
-        return queries.listar_ufs(conn)
-
-
-@st.cache_data(ttl=CACHE_TTL_SEGUNDOS)
-def listar_deputados(partidos: tuple[str, ...] = (), ufs: tuple[str, ...] = ()) -> pd.DataFrame:
-    with _conn() as conn:
-        return queries.listar_deputados(conn, partidos, ufs)
-
-
-@st.cache_data(ttl=CACHE_TTL_SEGUNDOS)
-def listar_meses_disponiveis() -> list[str]:
-    with _conn() as conn:
-        return queries.listar_meses_disponiveis(conn)
-
-
-@st.cache_data(ttl=CACHE_TTL_SEGUNDOS)
-def get_findings(
-    mes_inicio: str,
-    mes_fim: str,
-    partidos: tuple[str, ...] = (),
-    ufs: tuple[str, ...] = (),
-    deputado_id: int | None = None,
-    tipos: tuple[str, ...] = (),
-    severidades: tuple[str, ...] = (),
-) -> pd.DataFrame:
-    with _conn() as conn:
-        return queries.get_findings(conn, mes_inicio, mes_fim, partidos, ufs, deputado_id, tipos, severidades)
-
-
-@st.cache_data(ttl=CACHE_TTL_SEGUNDOS)
-def listar_tipos_finding() -> list[str]:
-    with _conn() as conn:
-        return queries.listar_tipos_finding(conn)
-
-
-@st.cache_data(ttl=CACHE_TTL_SEGUNDOS)
-def get_despesas_mensal(
-    mes_inicio: str,
-    mes_fim: str,
-    partidos: tuple[str, ...] = (),
-    ufs: tuple[str, ...] = (),
-    deputado_id: int | None = None,
-) -> pd.DataFrame:
-    with _conn() as conn:
-        return queries.get_despesas_mensal(conn, mes_inicio, mes_fim, partidos, ufs, deputado_id)
-
-
-@st.cache_data(ttl=CACHE_TTL_SEGUNDOS)
-def get_despesas_por_categoria(
-    mes_inicio: str,
-    mes_fim: str,
-    partidos: tuple[str, ...] = (),
-    ufs: tuple[str, ...] = (),
-    deputado_id: int | None = None,
-) -> pd.DataFrame:
-    with _conn() as conn:
-        return queries.get_despesas_por_categoria(conn, mes_inicio, mes_fim, partidos, ufs, deputado_id)
-
-
-@st.cache_data(ttl=CACHE_TTL_SEGUNDOS)
-def get_despesas_detalhado(
-    mes_inicio: str,
-    mes_fim: str,
-    partidos: tuple[str, ...] = (),
-    ufs: tuple[str, ...] = (),
-    deputado_id: int | None = None,
-    limite: int = 300,
-) -> pd.DataFrame:
-    with _conn() as conn:
-        return queries.get_despesas_detalhado(conn, mes_inicio, mes_fim, partidos, ufs, deputado_id, limite)
-
-
-@st.cache_data(ttl=CACHE_TTL_SEGUNDOS)
-def get_ranking_gasto(
-    mes_inicio: str,
-    mes_fim: str,
-    partidos: tuple[str, ...] = (),
-    ufs: tuple[str, ...] = (),
-    limite: int = 20,
-) -> pd.DataFrame:
-    with _conn() as conn:
-        return queries.get_ranking_gasto(conn, mes_inicio, mes_fim, partidos, ufs, limite)
-
-
-@st.cache_data(ttl=CACHE_TTL_SEGUNDOS)
-def get_presenca_mensal(
-    mes_inicio: str,
-    mes_fim: str,
-    partidos: tuple[str, ...] = (),
-    ufs: tuple[str, ...] = (),
-    deputado_id: int | None = None,
-) -> pd.DataFrame:
-    with _conn() as conn:
-        return queries.get_presenca_mensal(conn, mes_inicio, mes_fim, partidos, ufs, deputado_id)
-
-
-@st.cache_data(ttl=CACHE_TTL_SEGUNDOS)
-def get_perfil_deputado(deputado_id: int) -> dict | None:
-    with _conn() as conn:
-        return queries.get_perfil_deputado(conn, deputado_id)
-
-
-@st.cache_data(ttl=CACHE_TTL_SEGUNDOS)
-def get_historico_deputado(deputado_id: int) -> pd.DataFrame:
-    with _conn() as conn:
-        return queries.get_historico_deputado(conn, deputado_id)
-
-
-@st.cache_data(ttl=CACHE_TTL_SEGUNDOS)
-def get_redes_sociais(deputado_id: int) -> pd.DataFrame:
-    with _conn() as conn:
-        return queries.get_redes_sociais(conn, deputado_id)
+listar_partidos = _cached_query(queries.listar_partidos)
+listar_ufs = _cached_query(queries.listar_ufs)
+listar_deputados = _cached_query(queries.listar_deputados)
+listar_meses_disponiveis = _cached_query(queries.listar_meses_disponiveis)
+get_findings = _cached_query(queries.get_findings)
+listar_tipos_finding = _cached_query(queries.listar_tipos_finding)
+get_despesas_mensal = _cached_query(queries.get_despesas_mensal)
+get_despesas_por_categoria = _cached_query(queries.get_despesas_por_categoria)
+get_despesas_detalhado = _cached_query(queries.get_despesas_detalhado)
+get_ranking_gasto = _cached_query(queries.get_ranking_gasto)
+get_presenca_mensal = _cached_query(queries.get_presenca_mensal)
+get_perfil_deputado = _cached_query(queries.get_perfil_deputado)
+get_historico_deputado = _cached_query(queries.get_historico_deputado)
+get_redes_sociais = _cached_query(queries.get_redes_sociais)
