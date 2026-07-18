@@ -48,49 +48,72 @@ def render(mode: Mode = "local") -> None:
         st.warning("Banco de dados ainda sem despesas. Rode o backfill/update antes de usar o dashboard.")
         st.stop()
 
-    # No modo publico, a URL e a fonte inicial dos filtros (link
-    # compartilhavel) - le uma vez aqui, com fallback pro padrao de sempre
-    # se o parametro nao existir ou nao for mais valido (mes fora do
-    # intervalo disponivel, partido/UF/deputado que sumiu do banco etc).
+    # Cada widget de filtro usa `key=` fixo (nunca muda entre reruns) - e
+    # Streamlit quem mantem o valor em st.session_state[key] sozinho a
+    # partir dai. NAO passar `default`/`index` recalculado a cada rerun (o
+    # jeito antigo): isso muda a identidade implicita do widget toda vez
+    # que o valor computado difere do da rodada anterior, e o Streamlit
+    # trata como um widget NOVO - na pratica, o multiselect fecha/perde a
+    # selecao a cada clique. `key` fixo evita isso completamente.
+    #
+    # No modo publico, a URL preenche esses `session_state[key]` uma unica
+    # vez por sessao (`primeira_carga`), antes dos widgets serem criados -
+    # depois disso quem manda e so a interacao do usuario.
+    primeira_carga = mode == "public" and "_filtros_url_aplicados" not in st.session_state
     qp = st.query_params if mode == "public" else {}
+
+    if primeira_carga:
+        if qp.get("de") in meses_disponiveis:
+            st.session_state["filtro_mes_inicio"] = qp["de"]
+        if qp.get("ate") in meses_disponiveis:
+            st.session_state["filtro_mes_fim"] = qp["ate"]
+        partidos_url = [p for p in qp.get_all("partido") if p in data.listar_partidos()]
+        if partidos_url:
+            st.session_state["filtro_partidos"] = partidos_url
+        ufs_url = [u for u in qp.get_all("uf") if u in data.listar_ufs()]
+        if ufs_url:
+            st.session_state["filtro_ufs"] = ufs_url
 
     with st.sidebar:
         st.header("Filtros")
 
         mes_min, mes_max = meses_disponiveis[0], meses_disponiveis[-1]
         idx_padrao_inicio = max(0, len(meses_disponiveis) - 12)  # ultimos 12 meses por padrao
-        idx_inicio = meses_disponiveis.index(qp["de"]) if qp.get("de") in meses_disponiveis else idx_padrao_inicio
-        idx_fim = meses_disponiveis.index(qp["ate"]) if qp.get("ate") in meses_disponiveis else len(meses_disponiveis) - 1
-        mes_inicio = st.selectbox("De (mes)", meses_disponiveis, index=idx_inicio)
-        mes_fim = st.selectbox("Ate (mes)", meses_disponiveis, index=idx_fim)
+        mes_inicio = st.selectbox("De (mes)", meses_disponiveis, index=idx_padrao_inicio, key="filtro_mes_inicio")
+        mes_fim = st.selectbox("Ate (mes)", meses_disponiveis, index=len(meses_disponiveis) - 1, key="filtro_mes_fim")
         if mes_inicio > mes_fim:
             st.error("'De' precisa ser antes de 'Ate'.")
             st.stop()
 
-        todos_partidos = data.listar_partidos()
-        partidos_padrao = [p for p in qp.get_all("partido") if p in todos_partidos] if mode == "public" else []
-        partidos_sel = tuple(st.multiselect("Partido", todos_partidos, default=partidos_padrao))
-
-        todas_ufs = data.listar_ufs()
-        ufs_padrao = [u for u in qp.get_all("uf") if u in todas_ufs] if mode == "public" else []
-        ufs_sel = tuple(st.multiselect("Estado (UF)", todas_ufs, default=ufs_padrao))
+        partidos_sel = tuple(st.multiselect("Partido", data.listar_partidos(), key="filtro_partidos"))
+        ufs_sel = tuple(st.multiselect("Estado (UF)", data.listar_ufs(), key="filtro_ufs"))
 
         deputados_df = data.listar_deputados(partidos_sel, ufs_sel)
         opcoes_deputado = ["(todos)"] + [
             f"{row.nome_eleitoral} ({row.sigla_partido}/{row.sigla_uf})" for row in deputados_df.itertuples()
         ]
-        idx_deputado_padrao = 0
-        deputado_padrao_id = qp.get("deputado") if mode == "public" else None
-        if deputado_padrao_id:
-            for i, row in enumerate(deputados_df.itertuples()):
-                if str(row.id) == deputado_padrao_id:
-                    idx_deputado_padrao = i + 1  # +1 pois opcoes_deputado[0] e "(todos)"
+
+        if primeira_carga and qp.get("deputado"):
+            for row in deputados_df.itertuples():
+                if str(row.id) == qp["deputado"]:
+                    st.session_state["filtro_deputado_label"] = f"{row.nome_eleitoral} ({row.sigla_partido}/{row.sigla_uf})"
                     break
-        deputado_escolhido = st.selectbox("Deputado", opcoes_deputado, index=idx_deputado_padrao)
+
+        # Deputado escolhido pode ter saido da lista (usuario mudou
+        # partido/UF depois de escolher um deputado especifico) - sem essa
+        # checagem o selectbox quebra (valor em session_state fora de
+        # `options`). Volta pra "(todos)", que e o comportamento esperado.
+        if st.session_state.get("filtro_deputado_label") not in opcoes_deputado:
+            st.session_state["filtro_deputado_label"] = "(todos)"
+
+        deputado_escolhido = st.selectbox("Deputado", opcoes_deputado, key="filtro_deputado_label")
         deputado_id_sel = None
         if deputado_escolhido != "(todos)":
             idx = opcoes_deputado.index(deputado_escolhido) - 1
             deputado_id_sel = int(deputados_df.iloc[idx]["id"])
+
+        if primeira_carga:
+            st.session_state["_filtros_url_aplicados"] = True
 
         st.caption(f"{len(deputados_df)} deputado(s) no filtro atual de partido/UF.")
         if mode == "local" and st.button("Recarregar dados"):
