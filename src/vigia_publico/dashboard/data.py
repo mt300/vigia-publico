@@ -85,3 +85,19 @@ get_presenca_mensal = _cached_query(queries.get_presenca_mensal)
 get_perfil_deputado = _cached_query(queries.get_perfil_deputado)
 get_historico_deputado = _cached_query(queries.get_historico_deputado)
 get_redes_sociais = _cached_query(queries.get_redes_sociais)
+
+# --- Senado --------------------------------------------------------------
+# Mesmo decorator `_cached_query` - obrigatorio, nao opcional (ver docstring
+# acima: e o mecanismo que ja teve 2 bugs de colisao de cache corrigidos).
+
+listar_partidos_senado = _cached_query(queries.listar_partidos_senado)
+listar_ufs_senado = _cached_query(queries.listar_ufs_senado)
+listar_senadores = _cached_query(queries.listar_senadores)
+listar_meses_disponiveis_senado = _cached_query(queries.listar_meses_disponiveis_senado)
+get_findings_senado = _cached_query(queries.get_findings_senado)
+listar_tipos_finding_senado = _cached_query(queries.listar_tipos_finding_senado)
+get_despesas_mensal_senado = _cached_query(queries.get_despesas_mensal_senado)
+get_despesas_por_categoria_senado = _cached_query(queries.get_despesas_por_categoria_senado)
+get_despesas_detalhado_senado = _cached_query(queries.get_despesas_detalhado_senado)
+get_ranking_gasto_senado = _cached_query(queries.get_ranking_gasto_senado)
+get_perfil_senador = _cached_query(queries.get_perfil_senador)

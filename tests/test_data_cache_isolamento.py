@@ -103,3 +103,19 @@ def test_queries_diferentes_com_mesma_forma_de_argumentos_nao_colidem(banco_com_
 
     por_categoria = data.get_despesas_por_categoria("2024-03", "2024-03")
     assert list(por_categoria.columns) == ["tipo_despesa", "total"]  # falhava antes: vinha ['mes', 'total']
+
+
+def test_query_senado_e_query_camara_com_mesma_forma_nao_colidem(banco_com_despesa):
+    """`listar_partidos` (Camara) e `listar_partidos_senado` (Senado) tem a
+    MESMA forma (zero argumentos) - garante que sao funcoes decoradas
+    distintas (nomes qualificados diferentes), nao a mesma entrada de
+    cache reaproveitada entre as duas casas."""
+    conn = sqlite3.connect(banco_com_despesa)
+    conn.execute("INSERT INTO senadores (id, nome_parlamentar, sigla_partido, sigla_uf) VALUES (1, 'Fulana', 'PSDB', 'RJ')")
+    conn.commit()
+    conn.close()
+
+    data.use_db_path(banco_com_despesa)
+
+    assert data.listar_partidos() == ["PT"]
+    assert data.listar_partidos_senado() == ["PSDB"]

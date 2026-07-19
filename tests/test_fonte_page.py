@@ -23,10 +23,26 @@ def test_url_permitida_aceita_api_real_da_camara(url):
 @pytest.mark.parametrize(
     "url",
     [
+        "https://adm.senado.gov.br/adm-dadosabertos/api/v1/senadores/despesas_ceaps/2024",
+        "https://adm.senado.gov.br/adm-dadosabertos/api/v1/senadores/despesas_ceaps/2020",
+    ],
+)
+def test_url_permitida_aceita_api_real_do_senado(url):
+    assert _url_permitida(url) is True
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
         "https://evil.com/steal-data",
         "http://169.254.169.254/latest/meta-data/",  # SSRF classico contra metadata de cloud
         "http://dadosabertos.camara.leg.br/api/v2/deputados/1",  # http, nao https
         "https://dadosabertos.camara.leg.br.evil.com/api/v2/deputados/1",  # host parecido, subdominio falso
+        "http://adm.senado.gov.br/adm-dadosabertos/api/v1/senadores/despesas_ceaps/2024",  # http, nao https
+        "https://adm.senado.gov.br.evil.com/adm-dadosabertos/api/v1/senadores/despesas_ceaps/2024",  # host parecido, falso
+        # legis.senado.leg.br deliberadamente NAO liberado neste plano (nenhum
+        # fonte_url do MVP aponta pra la - so o CEAPS, host administrativo).
+        "https://legis.senado.leg.br/dadosabertos/senador/lista/atual",
         "javascript:alert(1)",
         "file:///etc/passwd",
         "",

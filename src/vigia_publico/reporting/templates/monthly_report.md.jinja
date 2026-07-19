@@ -41,6 +41,35 @@ Fonte: {{ finding.fonte_url }}
 ---
 {% endfor %}
 
+{% if senadores_com_achados %}
+## Ranking de senadores por numero de alertas no mes
+
+| # | Senador | Partido/UF | Alertas |
+|---|---|---|---|
+{%- for item in ranking_senadores %}
+| {{ loop.index }} | {{ item.nome }} | {{ item.sigla_partido }}/{{ item.sigla_uf }} | {{ item.total }} |
+{%- endfor %}
+
+---
+
+{% for senador in senadores_com_achados %}
+## {{ senador.nome_parlamentar }} ({{ senador.sigla_partido }}/{{ senador.sigla_uf }}) - Senado
+
+{% for finding in senador.findings %}
+### {{ finding.tipo }} - severidade: {{ finding.severidade }}
+
+{{ finding.descricao }}
+
+{%- if finding.fonte_url %}
+
+Fonte: {{ finding.fonte_url }}
+{%- endif %}
+
+{% endfor %}
+---
+{% endfor %}
+{% endif %}
+
 ## Metodologia e disclaimer
 
 - **Gastos**: outliers calculados por z-score comparando o gasto do mes por categoria com a
@@ -58,6 +87,9 @@ Fonte: {{ finding.fonte_url }}
   (Claude/Anthropic) com base em criterios objetivos e citacao literal do texto como evidencia.
   **Estes sao sinais heuristicos para revisao humana, nao vereditos ou acusacoes.**
 - Troca de partido e informativa (severidade baixa), nao indica necessariamente irregularidade.
+- **Senado**: achados de gasto (CEAPS - Cota para Exercicio da Atividade Parlamentar) usam a mesma
+  metodologia de outlier por z-score da Camara. Ainda nao ha regras de presenca/votacao nem de
+  discursos para o Senado (escopo do MVP e so gastos).
 
 ---
 

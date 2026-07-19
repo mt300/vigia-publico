@@ -10,9 +10,10 @@ ninguem le XML cru. Essa pagina busca o mesmo endpoint com o header certo e
 renderiza uma tabela/JSON legivel, com um link pro endpoint bruto embaixo
 pra quem realmente quiser ir la.
 
-Seguranca: so busca URLs do proprio host da API da Camara (HOST_PERMITIDO) -
-sem essa checagem, aceitar `?url=` livremente seria um SSRF (visitante
-poderia tentar fazer o servidor buscar qualquer URL, inclusive interna).
+Seguranca: so busca URLs de hosts das APIs de Dados Abertos ja usadas pelo
+pipeline (HOSTS_PERMITIDOS) - sem essa checagem, aceitar `?url=` livremente
+seria um SSRF (visitante poderia tentar fazer o servidor buscar qualquer
+URL, inclusive interna).
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ import urllib.request
 import pandas as pd
 import streamlit as st
 
-HOST_PERMITIDO = "dadosabertos.camara.leg.br"
+HOSTS_PERMITIDOS = {"dadosabertos.camara.leg.br", "adm.senado.gov.br"}
 
 # Despesas/votos de um mes ja fechado nao mudam mais - cachear por 1h evita
 # bater na API da Camara de novo a cada visita/refresh do mesmo link "Ver
@@ -51,7 +52,7 @@ def build_fonte_amigavel_url(raw_url: str) -> str:
 
 def _url_permitida(url: str) -> bool:
     p = urllib.parse.urlparse(url)
-    return p.scheme == "https" and p.hostname == HOST_PERMITIDO
+    return p.scheme == "https" and p.hostname in HOSTS_PERMITIDOS
 
 
 @st.cache_data(ttl=CACHE_TTL_SEGUNDOS)
@@ -64,16 +65,16 @@ def _buscar_json(url: str) -> dict | list:
 def render_fonte() -> None:
     st.title("🔎 Fonte de um achado")
     st.caption(
-        "Busca ao vivo, na API pública de Dados Abertos da Câmara dos Deputados, o dado bruto "
-        "por trás de um achado - a mesma fonte que o Vigia Público usa - num formato mais fácil "
-        "de ler do que o XML/JSON cru da API."
+        "Busca ao vivo, na API pública de Dados Abertos da Câmara dos Deputados ou do Senado Federal, "
+        "o dado bruto por trás de um achado - a mesma fonte que o Vigia Público usa - num formato mais "
+        "fácil de ler do que o XML/JSON cru da API."
     )
 
     url = st.query_params.get("url")
     if not url or not _url_permitida(url):
         st.warning(
-            "Nenhuma fonte válida foi indicada nessa página. Volte pro **Painel** e clique em "
-            "'Ver fonte' na tabela de achados."
+            "Nenhuma fonte válida foi indicada nessa página. Volte pro **Painel Deputados** ou "
+            "**Painel Senadores** e clique em 'Ver fonte' na tabela de achados."
         )
         return
 
@@ -81,7 +82,7 @@ def render_fonte() -> None:
         payload = _buscar_json(url)
     except (urllib.error.URLError, TimeoutError, ValueError) as exc:
         st.error(f"Não foi possível buscar o dado agora ({exc}). Tente o link direto abaixo.")
-        st.link_button("Ver o dado bruto direto na API da Câmara", url)
+        st.link_button("Ver o dado bruto direto na API", url)
         return
 
     dados = payload.get("dados", payload) if isinstance(payload, dict) else payload
@@ -94,4 +95,4 @@ def render_fonte() -> None:
         st.info("A consulta não retornou dados.")
 
     st.divider()
-    st.link_button("Ver o dado bruto (JSON) direto na API da Câmara", url)
+    st.link_button("Ver o dado bruto (JSON) direto na API", url)

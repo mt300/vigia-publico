@@ -20,6 +20,14 @@ DB_PATH = DATA_DIR / "vigia_publico.db"
 CAMARA_API_BASE_URL = "https://dadosabertos.camara.leg.br/api/v2"
 CAMARA_API_REQUESTS_PER_SECOND = 4
 
+# Duas APIs distintas do Senado (hosts diferentes) - confirmado num spike
+# real (ver PR/commit): a administrativa (CEAPS) devolve JSON puro sem
+# sufixo especial; a legislativa (perfil/roster) precisa do sufixo `.json`
+# no path, senao devolve XML.
+SENADO_ADM_API_BASE_URL = "https://adm.senado.gov.br/adm-dadosabertos/api/v1"
+SENADO_LEGIS_API_BASE_URL = "https://legis.senado.leg.br/dadosabertos"
+SENADO_API_REQUESTS_PER_SECOND = 2  # conservador - nao ha doc de rate limit confirmada
+
 # Dominio publico do dashboard - usado so pra montar o link compartilhavel
 # (dashboard/views.py). Sobrescrevivel via env var pra testar em outro
 # dominio/porta sem editar codigo.

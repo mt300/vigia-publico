@@ -72,8 +72,9 @@ def build_markdown_summary(findings: pd.DataFrame, filtros: dict[str, str]) -> s
     usa_categoria = "categoria" in findings.columns
     coluna_tipo = "categoria" if usa_categoria else "tipo"
     coluna_texto = "resumo" if usa_categoria else "descricao"
+    coluna_nome = "nome_eleitoral" if "nome_eleitoral" in findings.columns else "nome_parlamentar"
 
-    for (nome, partido, uf), grupo in findings.groupby(["nome_eleitoral", "sigla_partido", "sigla_uf"]):
+    for (nome, partido, uf), grupo in findings.groupby([coluna_nome, "sigla_partido", "sigla_uf"]):
         linhas.append(f"## {nome} ({partido}/{uf})")
         linhas.append("")
         for row in grupo.itertuples():

@@ -13,15 +13,16 @@ from vigia_publico.detection.neutral_copy import GLOSSARIO_ESTATISTICO, TIPO_EXP
 
 def render_home() -> None:
     st.title("Vigia Público")
-    st.subheader("Monitor independente de deputados federais brasileiros, com dados 100% públicos.")
+    st.subheader("Monitor independente de deputados federais e senadores brasileiros, com dados 100% públicos.")
 
     st.markdown(
         "O Vigia Público acompanha gastos, presença em votações e discursos dos deputados "
         "federais em exercício, usando exclusivamente a API de Dados Abertos da Câmara dos "
-        "Deputados (`dadosabertos.camara.leg.br`). Ele compara cada deputado com o próprio "
-        "histórico e com colegas de partido/estado, e destaca **padrões estatísticos que fogem "
-        "do comum** - não acusações, não conclusões. São sinais para você (ou para o jornalismo, "
-        "ou para o próprio deputado) investigar mais a fundo."
+        "Deputados (`dadosabertos.camara.leg.br`), e gastos (CEAPS) dos senadores em exercício, "
+        "usando a API de Dados Abertos do Senado Federal (`adm.senado.gov.br`). Ele compara cada "
+        "parlamentar com o próprio histórico e com colegas de partido/estado, e destaca **padrões "
+        "estatísticos que fogem do comum** - não acusações, não conclusões. São sinais para você "
+        "(ou para o jornalismo, ou para o próprio parlamentar) investigar mais a fundo."
     )
 
     meses = data.listar_meses_disponiveis()
@@ -37,15 +38,21 @@ def render_home() -> None:
 
     st.divider()
 
-    c1, c2 = st.columns(2)
+    c1, c2, c3 = st.columns(3)
     with c1:
-        st.markdown("### 📊 Painel")
+        st.markdown("### 📊 Painel Deputados")
         st.markdown(
-            "Explore os dados com filtros por partido, estado, deputado e período - gastos, "
-            "presença em votações, discursos e os achados estatísticos de cada um. "
-            "*(menu **Painel** na barra lateral)*"
+            "Explore os dados dos deputados com filtros por partido, estado, deputado e período - "
+            "gastos, presença em votações, discursos e os achados estatísticos de cada um. "
+            "*(menu **Painel Deputados** na barra lateral)*"
         )
     with c2:
+        st.markdown("### 📊 Painel Senadores")
+        st.markdown(
+            "O mesmo tipo de análise, aplicada aos gastos (CEAPS) dos senadores em exercício. "
+            "*(menu **Painel Senadores** na barra lateral)*"
+        )
+    with c3:
         st.markdown("### 📖 Como funciona")
         st.markdown(
             "Não entendeu um termo como 'desvio-padrão' ou o que significa cada tipo de achado? "
@@ -67,11 +74,12 @@ def render_tutorial() -> None:
 
     st.markdown(
         "## De onde vêm os dados\n"
-        "Tudo vem da API pública e oficial da Câmara dos Deputados "
-        "(`dadosabertos.camara.leg.br`) - a mesma base que qualquer pessoa pode consultar. "
-        "Não há dado privado, vazado ou obtido por fora dos canais oficiais. O universo "
-        "coberto é o dos deputados **em exercício agora**, com o histórico completo de seus "
-        "mandatos anteriores."
+        "Tudo vem de APIs públicas e oficiais: a da Câmara dos Deputados "
+        "(`dadosabertos.camara.leg.br`) e a do Senado Federal (`adm.senado.gov.br`) - as mesmas "
+        "bases que qualquer pessoa pode consultar. Não há dado privado, vazado ou obtido por fora "
+        "dos canais oficiais. O universo coberto é o dos deputados e senadores **em exercício "
+        "agora**; para deputados, também o histórico completo de mandatos anteriores. Para "
+        "senadores, o Painel Senadores cobre só gastos (CEAPS) por enquanto."
     )
 
     st.markdown(
@@ -95,22 +103,23 @@ def render_tutorial() -> None:
 
     st.markdown(
         "## Como usar os filtros\n"
-        "No menu lateral do Painel: escolha o **período** (mês inicial/final), e opcionalmente "
-        "**partido**, **estado (UF)** e um **deputado específico**. Os filtros se combinam - "
-        "por exemplo, partido + estado mostra só deputados daquele partido naquele estado. Sem "
-        "nenhum deputado escolhido, as abas mostram dados agregados de todo o filtro; escolhendo "
-        "um deputado, a aba **Perfil** mostra o histórico individual completo dele."
+        "No menu lateral do **Painel Deputados** (ou do **Painel Senadores**, com os mesmos "
+        "filtros aplicados a senadores): escolha o **período** (mês inicial/final), e "
+        "opcionalmente **partido**, **estado (UF)** e um **parlamentar específico**. Os filtros "
+        "se combinam - por exemplo, partido + estado mostra só parlamentares daquele partido "
+        "naquele estado. Sem nenhum parlamentar escolhido, as abas mostram dados agregados de "
+        "todo o filtro; escolhendo um, a aba **Perfil** mostra o histórico individual completo dele."
     )
 
     st.markdown(
         "## Limitações conhecidas\n"
         "- A API não expõe o motivo formal de uma ausência em votação - é inferido por "
         "exclusão (deputado não aparece entre os votos registrados).\n"
-        "- Fornecedor usado por poucos deputados é, na maioria das vezes, só um fornecedor "
-        "regional/local - não uma empresa de fachada. Confirmar isso exigiria dados externos "
-        "(Receita Federal), fora do escopo atual.\n"
-        "- O projeto está em fase inicial (Câmara dos Deputados apenas - o Senado pode entrar "
-        "no escopo no futuro)."
+        "- Fornecedor usado por poucos deputados/senadores é, na maioria das vezes, só um "
+        "fornecedor regional/local - não uma empresa de fachada. Confirmar isso exigiria dados "
+        "externos (Receita Federal), fora do escopo atual.\n"
+        "- O Painel Senadores cobre só gastos (CEAPS) por enquanto - presença em votações e "
+        "discursos de senadores podem entrar no escopo no futuro."
     )
 
     st.divider()

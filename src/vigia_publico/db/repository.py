@@ -258,6 +258,86 @@ def upsert_discurso(conn: sqlite3.Connection, deputado_id: int, item: dict) -> s
     return uid
 
 
+# --- senadores / despesas_senadores ------------------------------------------
+
+
+def upsert_senador(conn: sqlite3.Connection, identificacao: dict) -> None:
+    """`identificacao` e o dict `IdentificacaoParlamentar` devolvido por
+    `senado_api.endpoints.listar_senadores_atuais` - campos em PascalCase,
+    diferente do camelCase da API da Camara."""
+    conn.execute(
+        """
+        INSERT INTO senadores (
+            id, nome_civil, nome_parlamentar, sexo, email, url_foto,
+            sigla_partido, sigla_uf, situacao, atualizado_em
+        ) VALUES (
+            :id, :nome_civil, :nome_parlamentar, :sexo, :email, :url_foto,
+            :sigla_partido, :sigla_uf, :situacao, :atualizado_em
+        )
+        ON CONFLICT (id) DO UPDATE SET
+            nome_civil = excluded.nome_civil,
+            nome_parlamentar = excluded.nome_parlamentar,
+            sexo = excluded.sexo,
+            email = excluded.email,
+            url_foto = excluded.url_foto,
+            sigla_partido = excluded.sigla_partido,
+            sigla_uf = excluded.sigla_uf,
+            situacao = excluded.situacao,
+            atualizado_em = excluded.atualizado_em
+        """,
+        {
+            "id": int(identificacao["CodigoParlamentar"]),
+            "nome_civil": identificacao.get("NomeCompletoParlamentar"),
+            "nome_parlamentar": identificacao.get("NomeParlamentar"),
+            "sexo": identificacao.get("SexoParlamentar"),
+            "email": identificacao.get("EmailParlamentar"),
+            "url_foto": identificacao.get("UrlFotoParlamentar"),
+            "sigla_partido": identificacao.get("SiglaPartidoParlamentar"),
+            "sigla_uf": identificacao.get("UfParlamentar"),
+            "situacao": "Exercício",  # lista/atual so traz quem esta em exercicio agora
+            "atualizado_em": _now(),
+        },
+    )
+
+
+def despesa_senador_uid(senador_id: int, item: dict) -> str:
+    return _hash("senado", senador_id, item.get("id"), item.get("ano"), item.get("mes"), item.get("data"), item.get("valorReembolsado"))
+
+
+def upsert_despesa_senador(conn: sqlite3.Connection, senador_id: int, item: dict) -> None:
+    uid = despesa_senador_uid(senador_id, item)
+    conn.execute(
+        """
+        INSERT INTO despesas_senadores (
+            uid, senador_id, ano, mes, tipo_despesa, data_documento,
+            nome_fornecedor, cnpj_cpf_fornecedor, tipo_documento, num_documento,
+            detalhamento, valor_reembolsado
+        ) VALUES (
+            :uid, :senador_id, :ano, :mes, :tipo_despesa, :data_documento,
+            :nome_fornecedor, :cnpj_cpf_fornecedor, :tipo_documento, :num_documento,
+            :detalhamento, :valor_reembolsado
+        )
+        ON CONFLICT (uid) DO UPDATE SET
+            valor_reembolsado = excluded.valor_reembolsado,
+            detalhamento = excluded.detalhamento
+        """,
+        {
+            "uid": uid,
+            "senador_id": senador_id,
+            "ano": item.get("ano"),
+            "mes": item.get("mes"),
+            "tipo_despesa": item.get("tipoDespesa"),
+            "data_documento": item.get("data"),
+            "nome_fornecedor": item.get("fornecedor"),
+            "cnpj_cpf_fornecedor": item.get("cpfCnpj"),
+            "tipo_documento": item.get("tipoDocumento"),
+            "num_documento": item.get("documento"),
+            "detalhamento": item.get("detalhamento"),
+            "valor_reembolsado": item.get("valorReembolsado"),
+        },
+    )
+
+
 # --- votacoes / votos --------------------------------------------------------
 
 
@@ -397,8 +477,8 @@ def set_llm_cache(conn: sqlite3.Connection, discurso_uid: str, prompt_version: s
 # --- findings ---------------------------------------------------------------
 
 
-def clear_findings_for_month(conn: sqlite3.Connection, mes_referencia: str) -> None:
-    conn.execute("DELETE FROM findings WHERE mes_referencia = ?", (mes_referencia,))
+def clear_findings_for_month(conn: sqlite3.Connection, mes_referencia: str, casa: str = "camara") -> None:
+    conn.execute("DELETE FROM findings WHERE mes_referencia = ? AND casa = ?", (mes_referencia, casa))
 
 
 def insert_finding(
@@ -410,14 +490,21 @@ def insert_finding(
     descricao: str,
     dados_suporte: dict | None = None,
     fonte_url: str | None = None,
+    casa: str = "camara",
 ) -> None:
+    """`deputado_id` guarda o id do parlamentar - de deputado se `casa="camara"`,
+    de senador se `casa="senado"` (mesma coluna, sem FK - ver
+    db/migrations/0002_senadores.sql). Default `casa="camara"` preserva
+    todo call-site existente (11 regras em detection/statistical.py) sem
+    precisar mudar nenhuma."""
     conn.execute(
         """
-        INSERT INTO findings (mes_referencia, deputado_id, tipo, severidade, descricao, dados_suporte, fonte_url, criado_em)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO findings (mes_referencia, casa, deputado_id, tipo, severidade, descricao, dados_suporte, fonte_url, criado_em)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             mes_referencia,
+            casa,
             deputado_id,
             tipo,
             severidade,

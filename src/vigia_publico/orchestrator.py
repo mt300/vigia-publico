@@ -10,6 +10,7 @@ from vigia_publico.db import repository as repo
 from vigia_publico.db.connection import get_connection, run_migrations
 from vigia_publico.detection.llm_analysis import processar_discursos_mes
 from vigia_publico.detection.statistical import rodar_regras_estatisticas
+from vigia_publico.detection.statistical_senado import rodar_regras_estatisticas_senado
 from vigia_publico.ingestion.incremental import mes_referencia_padrao, run_incremental
 from vigia_publico.reporting.report_builder import build_report
 
@@ -52,6 +53,41 @@ def run_detection(db_path=DB_PATH, ano: int | None = None, mes: int | None = Non
     conn.close()
 
     logger.info("Deteccao de %s concluida: %d findings.", mes_referencia, len(findings))
+    return mes_referencia
+
+
+def run_detection_senado(db_path=DB_PATH, ano: int | None = None, mes: int | None = None) -> str:
+    """Espelha `run_detection`, so que pras 5 regras de gasto do Senado
+    (`statistical_senado.py`) - sem analise de discurso (fora de escopo do
+    MVP, ver plano). `finding["senador_id"]` vira o `deputado_id` posicional
+    de `insert_finding` (mesma coluna, sem FK, ver
+    db/migrations/0002_senadores.sql) com `casa="senado"`."""
+    if ano is None or mes is None:
+        ano, mes = mes_referencia_padrao()
+    mes_referencia = f"{ano:04d}-{mes:02d}"
+
+    conn = get_connection(db_path)
+    run_migrations(conn)
+
+    findings = rodar_regras_estatisticas_senado(conn, mes_referencia)
+
+    repo.clear_findings_for_month(conn, mes_referencia, casa="senado")
+    for finding in findings:
+        repo.insert_finding(
+            conn,
+            mes_referencia,
+            finding["senador_id"],
+            finding["tipo"],
+            finding.get("severidade", "media"),
+            finding["descricao"],
+            finding.get("dados_suporte"),
+            finding.get("fonte_url"),
+            casa="senado",
+        )
+    conn.commit()
+    conn.close()
+
+    logger.info("Deteccao do Senado (%s) concluida: %d findings.", mes_referencia, len(findings))
     return mes_referencia
 
 

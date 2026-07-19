@@ -4,15 +4,19 @@
 
 Monitor mensal de gastos, presenca e discursos dos deputados federais brasileiros,
 usando a API publica de Dados Abertos da Camara dos Deputados
-(`dadosabertos.camara.leg.br`). Detecta padroes suspeitos (outliers de gasto,
-incoerencia entre discurso e voto, discursos com possivel conteudo contra o
-interesse publico) e gera um relatorio Markdown por mes.
+(`dadosabertos.camara.leg.br`), e de gastos (CEAPS) dos senadores, usando a
+API publica de Dados Abertos do Senado Federal (`adm.senado.gov.br`). Detecta
+padroes suspeitos (outliers de gasto, incoerencia entre discurso e voto,
+discursos com possivel conteudo contra o interesse publico) e gera um
+relatorio Markdown por mes.
 
-> Escopo atual: Camara dos Deputados (nao o Senado) - o nome "Vigia Público"
-> foi escolhido de propósito pra nao ficar preso a uma casa legislativa so,
-> caso o Senado (ou outras esferas) entre no escopo no futuro. O diretorio no
-> disco ainda se chama `senado-sentinel` por legado (nome interno anterior);
-> o pacote Python e o nome do projeto ja sao `vigia_publico`/`vigia-publico`.
+> Escopo atual: Camara dos Deputados (gastos, presenca, discursos) + Senado
+> Federal (so gastos/CEAPS por enquanto - ver plano de MVP). O nome "Vigia
+> Público" foi escolhido de propósito pra nao ficar preso a uma casa
+> legislativa so. O diretorio no disco ainda se chama `senado-sentinel` por
+> legado (nome interno anterior, de antes do escopo incluir o Senado de
+> verdade); o pacote Python e o nome do projeto ja sao
+> `vigia_publico`/`vigia-publico`.
 
 ## Setup
 
@@ -24,10 +28,13 @@ copy .env.example .env      REM preencha ANTHROPIC_API_KEY para a analise de dis
 ## Uso
 
 ```
-uv run python -m vigia_publico.cli backfill              # ingestao inicial (demorado, rode uma vez)
-uv run python -m vigia_publico.cli backfill --limite 5    # so 5 deputados, para testar
-uv run python -m vigia_publico.cli run-all                # update + detect + report do mes anterior
-uv run python -m vigia_publico.cli report --mes-referencia 2024-03
+uv run python -m vigia_publico.cli backfill                       # ingestao inicial da Camara (demorado, rode uma vez)
+uv run python -m vigia_publico.cli backfill --limite 5             # so 5 deputados, para testar
+uv run python -m vigia_publico.cli backfill --casa senado          # ingestao inicial do Senado (gastos/CEAPS)
+uv run python -m vigia_publico.cli run-all                         # update + detect + report do mes anterior (Camara)
+uv run python -m vigia_publico.cli update --casa senado            # atualizacao incremental do Senado
+uv run python -m vigia_publico.cli detect --casa senado            # deteccao de padroes suspeitos do Senado
+uv run python -m vigia_publico.cli report --mes-referencia 2024-03  # relatorio unico (Camara + Senado)
 ```
 
 Sem `ANTHROPIC_API_KEY` configurada, o pipeline roda normalmente mas pula a
@@ -41,8 +48,9 @@ uv run streamlit run src/vigia_publico/dashboard/app.py
 ```
 
 Abre um dashboard local no navegador (`scripts\run_dashboard.bat` faz o mesmo).
-Filtros por periodo, partido, UF e deputado na barra lateral; abas para
-achados, gastos, presenca/votos e perfil do deputado.
+Duas paginas na barra lateral: **Painel** (Camara - filtros por periodo,
+partido, UF e deputado; abas de achados, gastos, presenca/votos e perfil) e
+**Painel Senado** (mesma ideia, so gastos - MVP).
 
 ## Agendamento mensal (Windows Task Scheduler)
 
@@ -68,6 +76,11 @@ mes anterior (ja fechado). Teste o `.bat` manualmente antes de agendar.
   veredito ou acusacao.
 - Fase 2 (redes sociais) ainda nao implementada - os links ja sao coletados e
   armazenados em `deputado_redes_sociais` para uso futuro.
+- **Senado**: MVP e so gastos (CEAPS) - sem presenca/votacao nem discursos
+  (formato desses dados no Senado ainda nao foi verificado). Tabelas
+  paralelas (`senadores`/`despesas_senadores`), nao unificadas com
+  `deputados`/`despesas` - as APIs de origem ja sao estruturalmente
+  diferentes. `findings.casa` distingue os achados das duas casas.
 
 ## Ideias futuras (precisam de dados externos)
 

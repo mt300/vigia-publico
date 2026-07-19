@@ -77,7 +77,7 @@ def get_findings(
                f.tipo, f.severidade, f.descricao, f.dados_suporte, f.fonte_url, f.deputado_id
         FROM findings f
         JOIN deputados d ON d.id = f.deputado_id
-        WHERE f.mes_referencia >= ? AND f.mes_referencia <= ? {filtro}
+        WHERE f.casa = 'camara' AND f.mes_referencia >= ? AND f.mes_referencia <= ? {filtro}
     """
     params = [mes_inicio, mes_fim] + params
     if tipos:
@@ -249,3 +249,172 @@ def get_historico_deputado(conn: sqlite3.Connection, deputado_id: int) -> pd.Dat
 
 def get_redes_sociais(conn: sqlite3.Connection, deputado_id: int) -> pd.DataFrame:
     return _query(conn, "SELECT rede, url FROM deputado_redes_sociais WHERE deputado_id = ?", (deputado_id,))
+
+
+# --- Senado (Fase 4 - MVP so gastos, ver plano) -------------------------------
+#
+# Tabelas paralelas (`senadores`/`despesas_senadores`), nao generalizacao das
+# funcoes acima - as APIs de origem ja sao estruturalmente diferentes (ver
+# `senado_api/`). `findings` e a UNICA tabela compartilhada entre as duas
+# casas (coluna `casa` filtra) - por isso `get_findings_senado` e
+# `listar_tipos_finding_senado` filtram `WHERE casa = 'senado'` na mesma
+# tabela, enquanto as demais consultam `despesas_senadores`/`senadores`.
+
+
+def listar_partidos_senado(conn: sqlite3.Connection) -> list[str]:
+    df = _query(conn, "SELECT DISTINCT sigla_partido FROM senadores WHERE sigla_partido IS NOT NULL ORDER BY sigla_partido")
+    return df["sigla_partido"].tolist()
+
+
+def listar_ufs_senado(conn: sqlite3.Connection) -> list[str]:
+    df = _query(conn, "SELECT DISTINCT sigla_uf FROM senadores WHERE sigla_uf IS NOT NULL ORDER BY sigla_uf")
+    return df["sigla_uf"].tolist()
+
+
+def listar_senadores(conn: sqlite3.Connection, partidos: tuple[str, ...] = (), ufs: tuple[str, ...] = ()) -> pd.DataFrame:
+    sql = "SELECT id, nome_parlamentar, sigla_partido, sigla_uf, situacao, url_foto, email FROM senadores WHERE 1=1"
+    params: list = []
+    if partidos:
+        sql += f" AND sigla_partido IN ({','.join('?' * len(partidos))})"
+        params += list(partidos)
+    if ufs:
+        sql += f" AND sigla_uf IN ({','.join('?' * len(ufs))})"
+        params += list(ufs)
+    sql += " ORDER BY nome_parlamentar"
+    return _query(conn, sql, tuple(params))
+
+
+def listar_meses_disponiveis_senado(conn: sqlite3.Connection) -> list[str]:
+    df = _query(conn, "SELECT DISTINCT printf('%04d-%02d', ano, mes) AS m FROM despesas_senadores ORDER BY m")
+    return df["m"].tolist()
+
+
+def _filtro_senadores(partidos: tuple[str, ...], ufs: tuple[str, ...], senador_id: int | None) -> tuple[str, list]:
+    clausulas, params = [], []
+    if senador_id:
+        clausulas.append("s.id = ?")
+        params.append(senador_id)
+    if partidos:
+        clausulas.append(f"s.sigla_partido IN ({','.join('?' * len(partidos))})")
+        params += list(partidos)
+    if ufs:
+        clausulas.append(f"s.sigla_uf IN ({','.join('?' * len(ufs))})")
+        params += list(ufs)
+    return (" AND " + " AND ".join(clausulas)) if clausulas else "", params
+
+
+def get_findings_senado(
+    conn: sqlite3.Connection,
+    mes_inicio: str,
+    mes_fim: str,
+    partidos: tuple[str, ...] = (),
+    ufs: tuple[str, ...] = (),
+    senador_id: int | None = None,
+    tipos: tuple[str, ...] = (),
+    severidades: tuple[str, ...] = (),
+) -> pd.DataFrame:
+    filtro, params = _filtro_senadores(partidos, ufs, senador_id)
+    sql = f"""
+        SELECT f.mes_referencia, s.nome_parlamentar, s.sigla_partido, s.sigla_uf,
+               f.tipo, f.severidade, f.descricao, f.dados_suporte, f.fonte_url, f.deputado_id AS senador_id
+        FROM findings f
+        JOIN senadores s ON s.id = f.deputado_id
+        WHERE f.casa = 'senado' AND f.mes_referencia >= ? AND f.mes_referencia <= ? {filtro}
+    """
+    params = [mes_inicio, mes_fim] + params
+    if tipos:
+        sql += f" AND f.tipo IN ({','.join('?' * len(tipos))})"
+        params += list(tipos)
+    if severidades:
+        sql += f" AND f.severidade IN ({','.join('?' * len(severidades))})"
+        params += list(severidades)
+    sql += " ORDER BY f.mes_referencia DESC, f.severidade"
+    return _query(conn, sql, tuple(params))
+
+
+def listar_tipos_finding_senado(conn: sqlite3.Connection) -> list[str]:
+    return _query(conn, "SELECT DISTINCT tipo FROM findings WHERE casa = 'senado' ORDER BY tipo")["tipo"].tolist()
+
+
+def get_despesas_mensal_senado(
+    conn: sqlite3.Connection,
+    mes_inicio: str,
+    mes_fim: str,
+    partidos: tuple[str, ...] = (),
+    ufs: tuple[str, ...] = (),
+    senador_id: int | None = None,
+) -> pd.DataFrame:
+    filtro, params = _filtro_senadores(partidos, ufs, senador_id)
+    sql = f"""
+        SELECT printf('%04d-%02d', e.ano, e.mes) AS mes, SUM(e.valor_reembolsado) AS total
+        FROM despesas_senadores e
+        JOIN senadores s ON s.id = e.senador_id
+        WHERE printf('%04d-%02d', e.ano, e.mes) >= ? AND printf('%04d-%02d', e.ano, e.mes) <= ? {filtro}
+        GROUP BY mes ORDER BY mes
+    """
+    return _query(conn, sql, tuple([mes_inicio, mes_fim] + params))
+
+
+def get_despesas_por_categoria_senado(
+    conn: sqlite3.Connection,
+    mes_inicio: str,
+    mes_fim: str,
+    partidos: tuple[str, ...] = (),
+    ufs: tuple[str, ...] = (),
+    senador_id: int | None = None,
+) -> pd.DataFrame:
+    filtro, params = _filtro_senadores(partidos, ufs, senador_id)
+    sql = f"""
+        SELECT e.tipo_despesa, SUM(e.valor_reembolsado) AS total
+        FROM despesas_senadores e
+        JOIN senadores s ON s.id = e.senador_id
+        WHERE printf('%04d-%02d', e.ano, e.mes) >= ? AND printf('%04d-%02d', e.ano, e.mes) <= ? {filtro}
+        GROUP BY e.tipo_despesa ORDER BY total DESC
+    """
+    return _query(conn, sql, tuple([mes_inicio, mes_fim] + params))
+
+
+def get_despesas_detalhado_senado(
+    conn: sqlite3.Connection,
+    mes_inicio: str,
+    mes_fim: str,
+    partidos: tuple[str, ...] = (),
+    ufs: tuple[str, ...] = (),
+    senador_id: int | None = None,
+    limite: int = 300,
+) -> pd.DataFrame:
+    filtro, params = _filtro_senadores(partidos, ufs, senador_id)
+    sql = f"""
+        SELECT s.nome_parlamentar, s.sigla_partido, s.sigla_uf, e.data_documento,
+               e.tipo_despesa, e.nome_fornecedor, e.valor_reembolsado
+        FROM despesas_senadores e
+        JOIN senadores s ON s.id = e.senador_id
+        WHERE printf('%04d-%02d', e.ano, e.mes) >= ? AND printf('%04d-%02d', e.ano, e.mes) <= ? {filtro}
+        ORDER BY e.valor_reembolsado DESC
+        LIMIT ?
+    """
+    return _query(conn, sql, tuple([mes_inicio, mes_fim] + params + [limite]))
+
+
+def get_ranking_gasto_senado(
+    conn: sqlite3.Connection,
+    mes_inicio: str,
+    mes_fim: str,
+    partidos: tuple[str, ...] = (),
+    ufs: tuple[str, ...] = (),
+    limite: int = 20,
+) -> pd.DataFrame:
+    filtro, params = _filtro_senadores(partidos, ufs, None)
+    sql = f"""
+        SELECT s.id, s.nome_parlamentar, s.sigla_partido, s.sigla_uf, SUM(e.valor_reembolsado) AS total
+        FROM despesas_senadores e
+        JOIN senadores s ON s.id = e.senador_id
+        WHERE printf('%04d-%02d', e.ano, e.mes) >= ? AND printf('%04d-%02d', e.ano, e.mes) <= ? {filtro}
+        GROUP BY s.id ORDER BY total DESC LIMIT ?
+    """
+    return _query(conn, sql, tuple([mes_inicio, mes_fim] + params + [limite]))
+
+
+def get_perfil_senador(conn: sqlite3.Connection, senador_id: int) -> dict | None:
+    df = _query(conn, "SELECT * FROM senadores WHERE id = ?", (senador_id,))
+    return df.iloc[0].to_dict() if not df.empty else None

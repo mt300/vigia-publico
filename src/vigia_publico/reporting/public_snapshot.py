@@ -83,6 +83,42 @@ def _reduzir_despesas(dest: sqlite3.Connection) -> None:
     dest.execute("CREATE INDEX idx_despesas_dep_periodo ON despesas(deputado_id, ano, mes)")
 
 
+def _reduzir_despesas_senadores(dest: sqlite3.Connection) -> None:
+    """Mesmo tratamento de `_reduzir_despesas` (rebuild sem `uid`, elimina o
+    indice B-tree do PRIMARY KEY TEXT), aplicado a `despesas_senadores`."""
+    dest.execute(
+        """
+        CREATE TABLE despesas_senadores_public (
+            senador_id INTEGER NOT NULL,
+            ano INTEGER,
+            mes INTEGER,
+            tipo_despesa TEXT,
+            data_documento TEXT,
+            nome_fornecedor TEXT,
+            cnpj_cpf_fornecedor TEXT,
+            tipo_documento TEXT,
+            num_documento TEXT,
+            detalhamento TEXT,
+            valor_reembolsado REAL
+        )
+        """
+    )
+    dest.execute(
+        """
+        INSERT INTO despesas_senadores_public (
+            senador_id, ano, mes, tipo_despesa, data_documento,
+            nome_fornecedor, cnpj_cpf_fornecedor, tipo_documento, num_documento, detalhamento, valor_reembolsado
+        )
+        SELECT senador_id, ano, mes, tipo_despesa, data_documento,
+               nome_fornecedor, cnpj_cpf_fornecedor, tipo_documento, num_documento, detalhamento, valor_reembolsado
+        FROM despesas_senadores
+        """
+    )
+    dest.execute("DROP TABLE despesas_senadores")
+    dest.execute("ALTER TABLE despesas_senadores_public RENAME TO despesas_senadores")
+    dest.execute("CREATE INDEX idx_despesas_sen_periodo ON despesas_senadores(senador_id, ano, mes)")
+
+
 def export_public_snapshot(source_db_path: Path = DB_PATH, output_path: Path = PUBLIC_DB_PATH) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.unlink(missing_ok=True)
@@ -107,10 +143,13 @@ def export_public_snapshot(source_db_path: Path = DB_PATH, output_path: Path = P
         """
     )
 
+    dest.execute("UPDATE senadores SET email = NULL")
+
     placeholders = ",".join("?" * len(TIPOS_PUBLICOS))
     dest.execute(f"DELETE FROM findings WHERE tipo NOT IN ({placeholders})", tuple(TIPOS_PUBLICOS))
 
     _reduzir_despesas(dest)
+    _reduzir_despesas_senadores(dest)
 
     dest.commit()
     dest.execute("VACUUM")

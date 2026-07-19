@@ -5,8 +5,8 @@ publico read-only (`public_data/vigia_publico_public.db`, gerado por
 `vigia-publico export-public-snapshot` - ver `reporting/public_snapshot.py`)
 e renderiza em `mode="public"` (sem severidade/descricao interpretativa, sem
 contato pessoal do deputado - ver `dashboard/views.py`). Multipagina: Inicio
-(landing), Painel (o dashboard em si) e Como funciona (tutorial) - ver
-`dashboard/public_pages.py`.
+(landing), Painel Deputados, Painel Senadores e Como funciona (tutorial) -
+ver `dashboard/public_pages.py`.
 
 Sem nenhuma secret: nao importa `anthropic`/`httpx` (nao estao no
 `requirements.txt` deste deploy) nem le `ANTHROPIC_API_KEY` - fisicamente
@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import streamlit as st  # noqa: E402
 
-from vigia_publico.dashboard import data, fonte_page, public_pages, theme, views  # noqa: E402
+from vigia_publico.dashboard import data, fonte_page, public_pages, theme, views, views_senado  # noqa: E402
 from vigia_publico.reporting.public_snapshot import ensure_decompressed  # noqa: E402
 
 st.set_page_config(page_title="Vigia Público", page_icon="\U0001f3db️", layout="wide")
@@ -41,7 +41,8 @@ pagina = st.navigation(
         # url_path explicito (nao o slug auto-derivado do title) - o link
         # compartilhavel (views.py) e os links "Ver fonte" (fonte_page.py)
         # montam a URL contra esses caminhos fixos.
-        st.Page(lambda: views.render(mode="public"), title="Painel", icon="📊", url_path="painel"),
+        st.Page(lambda: views.render(mode="public"), title="Painel Deputados", icon="📊", url_path="painel"),
+        st.Page(lambda: views_senado.render(mode="public"), title="Painel Senadores", icon="📊", url_path="painel-senado"),
         st.Page(public_pages.render_tutorial, title="Como funciona", icon="📖", url_path="como-funciona"),
         st.Page(fonte_page.render_fonte, title="Fonte de um achado", icon="🔎", url_path="fonte"),
     ]
